@@ -1,5 +1,5 @@
 """
-app/database/base.py
+database/base.py
 
 Clase base declarativa para SQLAlchemy 2.0.
 """
