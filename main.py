@@ -5,11 +5,11 @@ Punto de entrada principal con Login y separación de datos por usuario.
 
 import streamlit as st
 
-from app.pages.caja import render_caja
-from app.pages.pagos import render_pagos
+from pages.caja import render_caja
+from pages.pagos import render_pagos
 # Si tienes vistas para Clientes o Préstamos, impórtalas aquí:
-# from app.pages.clientes import render_clientes
-# from app.pages.prestamos import render_prestamos
+# from pages.clientes import render_clientes
+# from pages.prestamos import render_prestamos
 
 # Credenciales de acceso para la aplicación
 USUARIOS = {
@@ -88,8 +88,11 @@ def main():
 
 
 if __name__ == "__main__":
-    # Inicializar las tablas en Supabase automáticamente al arrancar la app
-    from app.database.database import init_db
-    init_db()
+    # Inicializar las tablas en la base de datos automáticamente al arrancar la app
+    try:
+        from database.database import init_db
+        init_db()
+    except ImportError:
+        pass
     
     main()
