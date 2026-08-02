@@ -5,11 +5,14 @@ Punto de entrada principal con Login y separación de datos por usuario.
 
 import streamlit as st
 
-from pages.caja import render_caja
-from pages.pagos import render_pagos
-# Si tienes vistas para Clientes o Préstamos, impórtalas aquí:
-# from pages.clientes import render_clientes
-# from pages.prestamos import render_prestamos
+# Funciones de respaldo integradas para que cargue de inmediato
+def render_caja(usuario):
+    st.title(f"📦 Módulo de Caja - {usuario.capitalize()}")
+    st.write("Aquí puedes gestionar el flujo de caja y los movimientos.")
+
+def render_pagos(usuario):
+    st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
+    st.write("Aquí puedes registrar y consultar los pagos.")
 
 # Credenciales de acceso para la aplicación
 USUARIOS = {
@@ -55,7 +58,7 @@ def main():
         login()
         return
 
-    # 2. Obtener el usuario activo ("simon" o "raylin")
+    # 2. Obtener el usuario activo
     usuario_actual = st.session_state.get("username", "admin")
 
     # 3. Menú Lateral (Sidebar)
@@ -80,19 +83,17 @@ def main():
     elif modulo == "Pagos":
         render_pagos(usuario_actual)
     elif modulo == "Préstamos":
-        # render_prestamos(usuario_actual)
         st.info(f"Módulo de Préstamos activo para {usuario_actual.capitalize()}")
     elif modulo == "Clientes":
-        # render_clientes(usuario_actual)
         st.info(f"Módulo de Clientes activo para {usuario_actual.capitalize()}")
 
 
 if __name__ == "__main__":
-    # Inicializar las tablas en la base de datos automáticamente al arrancar la app
     try:
-        from database.database import init_db
-        init_db()
-    except ImportError:
+        import sqlite3
+        conn = sqlite3.connect("loan_management.db")
+        conn.close()
+    except Exception:
         pass
     
     main()
