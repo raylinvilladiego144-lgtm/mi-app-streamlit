@@ -1,5 +1,5 @@
 """
-app/repositories/prestamo_repository.py
+prestamo_repository.py
 
 Repositorio para la gestión de acceso a datos de
 Préstamos, Cuotas y Eventos Financieros.
@@ -9,13 +9,13 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.prestamo import (
+# Importaciones corregidas para la estructura plana en la raíz
+from models.prestamo import (
     Prestamo,
     Cuota,
     EstadoPrestamo,
 )
-
-from app.models.evento import (
+from models.evento import (
     EventoFinanciero,
 )
 
@@ -39,11 +39,9 @@ class PrestamoRepository:
         """
         Guarda un préstamo junto con sus cuotas.
         """
-
         self.db.add(prestamo)
         self.db.commit()
         self.db.refresh(prestamo)
-
         return prestamo
 
     def obtener_por_id(
@@ -53,7 +51,6 @@ class PrestamoRepository:
         """
         Obtiene un préstamo por su ID.
         """
-
         return (
             self.db.query(Prestamo)
             .filter(
@@ -69,7 +66,6 @@ class PrestamoRepository:
         """
         Retorna el préstamo activo de un cliente.
         """
-
         return (
             self.db.query(Prestamo)
             .filter(
@@ -85,7 +81,6 @@ class PrestamoRepository:
         """
         Lista todos los préstamos activos.
         """
-
         return (
             self.db.query(Prestamo)
             .filter(
@@ -101,10 +96,8 @@ class PrestamoRepository:
         """
         Guarda cambios sobre un préstamo.
         """
-
         self.db.commit()
         self.db.refresh(prestamo)
-
         return prestamo
 
     # ==========================================================
@@ -118,7 +111,6 @@ class PrestamoRepository:
         """
         Obtiene una cuota por su ID.
         """
-
         return (
             self.db.query(Cuota)
             .filter(
@@ -134,7 +126,6 @@ class PrestamoRepository:
         """
         Lista las cuotas de un préstamo.
         """
-
         return (
             self.db.query(Cuota)
             .filter(
@@ -157,11 +148,9 @@ class PrestamoRepository:
         """
         Registra un evento financiero.
         """
-
         self.db.add(evento)
         self.db.commit()
         self.db.refresh(evento)
-
         return evento
 
     def listar_ultimos_eventos(
@@ -171,7 +160,6 @@ class PrestamoRepository:
         """
         Obtiene los últimos movimientos registrados.
         """
-
         return (
             self.db.query(
                 EventoFinanciero
