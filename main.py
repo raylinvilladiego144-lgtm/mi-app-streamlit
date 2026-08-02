@@ -17,7 +17,7 @@ def render_pagos(usuario):
 # Credenciales de acceso para la aplicación
 USUARIOS = {
     "simon": "12345",
-    "raylin": "12345",
+    "raylin": "Barcelona12*",
 }
 
 st.set_page_config(
