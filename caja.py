@@ -1,15 +1,17 @@
 """
-app/pages/caja.py
+caja.py
 
 Vista y controlador para la gestión de la caja por usuario.
 """
 
 from decimal import Decimal
 
+import streamlit as str_st  # o usa st directamente
 import streamlit as st
 
-from app.database.database import SessionLocal
-from app.services.caja_service import CajaService
+# Importaciones corregidas para estructura plana en la raíz
+from database.database import SessionLocal
+from services.caja_service import CajaService
 
 
 def render_caja(usuario_actual: str = "admin"):
