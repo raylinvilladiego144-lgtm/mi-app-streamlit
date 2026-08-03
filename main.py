@@ -290,8 +290,6 @@ def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o reinicia el sistema por completo si lo necesitas.")
 
-    db_path = "prestamos_v2.db"
-
     col1, col2 = st.columns(2)
 
     # --- 1. BOTÓN DE RESPALDO (BACKUP) GLOBAL ---
@@ -299,20 +297,23 @@ def render_gestion_respaldos(usuario):
         st.subheader("💾 Copia de Seguridad")
         st.write("Descarga una copia actual de la base de datos general.")
         
-        if os.path.exists(db_path):
+        archivos_db = [f for f in os.listdir(".") if f.endswith(".db")]
+        
+        if archivos_db:
+            db_path = archivos_db[0]
             with open(db_path, "rb") as f:
                 db_bytes = f.read()
             
             st.download_button(
-                label="📥 Descargar Respaldo (.db)",
+                label=f"📥 Descargar Respaldo ({db_path})",
                 data=db_bytes,
-                file_name="respaldo_prestamos_v2.db",
+                file_name=f"respaldo_{db_path}",
                 mime="application/octet-stream",
                 type="primary",
                 use_container_width=True
             )
         else:
-            st.warning("⚠️ Todavía no se detecta el archivo de la base de datos.")
+            st.warning("⚠️ Todavía no se detecta ningún archivo de base de datos.")
 
     # --- 2. ZONA DE PELIGRO: LIMPIEZA TOTAL DE LA BASE DE DATOS ---
     with col2:
@@ -325,12 +326,16 @@ def render_gestion_respaldos(usuario):
             if st.button("💥 Borrar Todo y Dejar en Ceros", type="primary", use_container_width=True):
                 if confirmar_total:
                     try:
-                        if os.path.exists(db_path):
-                            os.remove(db_path)
-                            st.success("¡Base de datos limpiada con éxito! Recargando...")
-                            st.rerun()
-                        else:
-                            st.warning("No se encontró el archivo de la base de datos.")
+                        borrados = 0
+                        for f in os.listdir("."):
+                            if f.endswith(".db"):
+                                os.remove(f)
+                                borrados += 1
+                        
+                        st.session_state.clear()
+                        
+                        st.success(f"¡Se eliminaron {borrados} archivo(s) de base de datos y se limpió la sesión con éxito! Recargando...")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"❌ Error al reiniciar: {e}")
                 else:
