@@ -1,6 +1,7 @@
 """
 prestamo_repository.py
-Repositorio con validación para evitar duplicar préstamos idénticos al mismo cliente.
+Repositorio con validación para evitar duplicar préstamos idénticos al mismo cliente 
+y motor de recálculo por temporalidad y vencimiento mensual.
 """
 
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from cliente import Cliente
 
 class PrestamoRepository:
     """
-    Repositorio optimizado para la gestión de préstamos y cuotas.
+    Repositorio optimizado para la gestión de préstamos, cuotas y recálculos por temporalidad mensual.
     """
 
     def __init__(self, db: Session):
@@ -123,14 +124,66 @@ class PrestamoRepository:
         self.db.refresh(nuevo_prestamo)
         return nuevo_prestamo
 
+    def evaluar_y_recalcular_temporalidad_mensual(self, usuario: str = None):
+        """
+        Motor de temporalidad: Recorre los préstamos activos y verifica si cuotas pendientes
+        han cruzado fuera del rango del mes en curso (comparando año/mes de fecha_pago_esperada 
+        con la fecha actual). Si están vencidas fuera del rango mensual, se les recalcula 
+        el interés pendiente aplicando el mismo porcentaje original pactado.
+        """
+        query = self.db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO)
+        if usuario:
+            query = query.filter(Prestamo.usuario == usuario)
+        
+        prestamos_activos = query.all()
+        hoy = datetime.now().date()
+
+        for p in prestamos_activos:
+            tasa_porcentual = p.porcentaje_interes or Decimal("0.0")
+            if tasa_porcentual <= 0:
+                continue
+            tasa_dec = tasa_porcentual / Decimal("100")
+
+            cuotas_pendientes = [
+                c for c in p.cuotas 
+                if c.estado in [EstadoCuota.PENDIENTE, EstadoCuota.PARCIAL] and c.fecha_pago_esperada
+            ]
+
+            for cuota in cuotas_pendientes:
+                # Comprobar si la fecha esperada está en un mes/año anterior al actual (fuera de rango mensual)
+                if cuota.fecha_pago_esperada < hoy:
+                    # Validar si ya cruzó un cambio de mes completo fuera del rango original
+                    if (hoy.year > cuota.fecha_pago_esperada.year) or \
+                       (hoy.year == cuota.fecha_pago_esperada.year and hoy.month > cuota.fecha_pago_esperada.month):
+                        
+                        saldo_pendiente_cuota = cuota.monto_cuota - (cuota.monto_pagado or Decimal("0.00"))
+                        
+                        # Evitar recálculos duplicados masivos en el mismo mes si ya fue ajustado
+                        marca_recalculo = f"[Recalculado Mes {hoy.month}/{hoy.year}]"
+                        obs_actual = getattr(cuota, "observaciones", "") or ""
+                        
+                        if marca_recalculo not in obs_actual:
+                            # Recálculo del interés sobre el saldo vencido usando el mismo % original
+                            interes_adicional = saldo_pendiente_cuota * tasa_dec
+                            cuota.monto_cuota += interes_adicional
+                            p.monto_total += interes_adicional
+                            
+                            cuota.observaciones = f"{obs_actual} {marca_recalculo}".strip()
+                            self.db.add(cuota)
+                            self.db.add(p)
+
+        self.db.commit()
+
     def listar_activos(self) -> list[Prestamo]:
         try:
+            self.evaluar_y_recalcular_temporalidad_mensual()
             return self.db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO).all()
         except Exception:
             return self.db.query(Prestamo).all()
 
     def obtener_por_usuario(self, usuario: str) -> list[Prestamo]:
         try:
+            self.evaluar_y_recalcular_temporalidad_mensual(usuario=usuario)
             return self.db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
         except Exception:
             return self.db.query(Prestamo).all()
