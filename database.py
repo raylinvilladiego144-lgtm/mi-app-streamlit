@@ -1,43 +1,22 @@
 """
-app/database/database.py
-
-Configuración central de SQLAlchemy.
+database.py
+Configuración de la sesión de base de datos SQLAlchemy para SQLite.
 """
-
-import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
 from base import Base
 
+# ✅ Asegúrate de usar esta URL exacta para SQLite (3 barras para ruta relativa)
+DATABASE_URL = "sqlite:///prestamos_v2.db"
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:Brunoka123%2A_@db.chhccznmqdnximbaaciy.supabase.co:5432/postgres"
+engine = create_engine(
+    DATABASE_URL, connect_args={"check_same_thread": False}
 )
-
-
-engine = create_engine(DATABASE_URL)
-
 
 SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
+    autocommit=False, autoflush=False, bind=engine
 )
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def init_db():
-    """
-    Crea todas las tablas registradas en SQLAlchemy.
-    """
     Base.metadata.create_all(bind=engine)
