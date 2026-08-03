@@ -1,6 +1,6 @@
 """
 main.py
-Punto de entrada principal con Login, Dashboard financiero y gestión de préstamos.
+Punto de entrada principal con Login, Dashboard financiero, Préstamos y Clientes.
 """
 
 from datetime import datetime
@@ -11,6 +11,7 @@ import streamlit as st
 from database import SessionLocal, init_db
 from caja_service import CajaService
 from prestamos import render_prestamos
+from cliente_repository import ClienteRepository
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -30,7 +31,7 @@ USUARIOS = {
 }
 
 
-# --- MÓDULOS DE LA APLICACIÓN (DASHBOARD) ---
+# --- MÓDULO 1: DASHBOARD / CAJA ---
 def render_dashboard(usuario):
     st.title(f"📊 Dashboard Financiero — {usuario.capitalize()}")
     st.markdown("Resumen general del estado de caja, capital en la calle y flujos de efectivo.")
@@ -90,15 +91,69 @@ def render_dashboard(usuario):
         db.close()
 
 
+# --- MÓDULO 2: PAGOS ---
 def render_pagos(usuario):
     st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
     st.write("Control de abonos y amortización de cuotas.")
     st.info("Módulo de pagos configurado y listo para enlazar con cuotas.")
 
 
+# --- MÓDULO 3: CLIENTES (CON FORMULARIO DE ESCRITURA) ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
-    st.info("Gestión de directorio de clientes.")
+    st.markdown("Gestión y registro del directorio de clientes.")
+
+    db = SessionLocal()
+    try:
+        repo = ClienteRepository(db)
+        
+        # --- FORMULARIO PARA REGISTRAR NUEVO CLIENTE ---
+        with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
+            with st.form("form_nuevo_cliente"):
+                nombre = st.text_input("Nombre completo")
+                telefono = st.text_input("Teléfono / Contacto")
+                direccion = st.text_input("Dirección")
+                
+                submitted = st.form_submit_button("Guardar Cliente", type="primary")
+                if submitted:
+                    if nombre.strip():
+                        try:
+                            repo.crear_cliente(
+                                nombre=nombre,
+                                telefono=telefono,
+                                direccion=direccion,
+                                usuario=usuario
+                            )
+                            st.success(f"¡Cliente '{nombre}' registrado con éxito!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar: {e}")
+                    else:
+                        st.warning("El nombre del cliente es obligatorio.")
+
+        st.divider()
+
+        # --- LISTADO DE CLIENTES REGISTRADOS ---
+        st.subheader("📋 Directorio de Clientes")
+        clientes = repo.obtener_por_usuario(usuario)
+
+        if not clientes:
+            st.info("No hay clientes registrados todavía. Usa el formulario de arriba para agregar uno.")
+        else:
+            data = []
+            for c in clientes:
+                data.append({
+                    "ID": c.id,
+                    "Nombre": getattr(c, "nombre", "N/A"),
+                    "Teléfono": getattr(c, "telefono", "N/A"),
+                    "Dirección": getattr(c, "direccion", "N/A")
+                })
+            
+            df_clientes = pd.DataFrame(data)
+            st.dataframe(df_clientes, use_container_width=True, hide_index=True)
+
+    finally:
+        db.close()
 
 
 # --- LOGIN ---
@@ -125,6 +180,7 @@ def login():
                     st.error("❌ Usuario o contraseña incorrectos.")
 
 
+# --- CONTROLADOR PRINCIPAL ---
 def main():
     if not st.session_state.get("logged_in", False):
         login()
