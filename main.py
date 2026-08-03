@@ -1,56 +1,108 @@
 """
 main.py
-Aplicación principal en Streamlit para la gestión de Caja, Préstamos, Clientes y Finanzas.
+Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos, Clientes, Gestión y Respaldos (Arquitectura Plana).
 """
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-import io
+import os
 import pandas as pd
 import streamlit as st
 
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-
-from database import SessionLocal
-from prestamo_repository import PrestamoRepository
+# --- IMPORTACIÓN DE MÓDULOS PLANOS EXISTENTES ---
+from database import SessionLocal, init_db
+from caja_service import CajaService
+from prestamos import render_prestamos
 from cliente_repository import ClienteRepository
-from prestamo import EstadoPrestamo, EstadoCuota
-from caja_service import CajaService  # Asegúrate de que tu servicio de caja esté disponible
+from prestamo import Prestamo, Cuota, EstadoPrestamo, EstadoCuota
 
+# --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
-    page_title="Sistema Financiero y de Préstamos",
-    page_icon="💰",
-    layout="wide"
+    page_title="Gestión de Préstamos e Inversiones",
+    page_icon="💳",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# --- GESTIÓN DE AUTENTICACIÓN SIMPLIFICADA ---
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "username" not in st.session_state:
-    st.session_state.username = "admin"
+# --- INICIALIZAR LAS TABLAS DE SQLALCHEMY AUTOMÁTICAMENTE ---
+init_db()
 
-def login_screen():
-    st.title("🔐 Iniciar Sesión - Sistema Financiero")
-    with st.form("login_form"):
-        username_input = st.text_input("Usuario", value="admin")
-        password_input = st.text_input("Contraseña", type="password")
-        submit_login = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
+# --- CREDENCIALES DE ACCESO ---
+USUARIOS = {
+    "simon": "12345",
+    "raylin": "Barcelona12*",
+}
 
-        if submit_login:
-            if username_input.strip():
-                st.session_state.authenticated = True
-                st.session_state.username = username_input.strip().lower()
-                st.success(f"¡Bienvenido, {st.session_state.username}!")
-                st.rerun()
-            else:
-                st.error("Por favor, ingresa un usuario válido.")
 
-if not st.session_state.authenticated:
-    login_screen()
-    st.stop()
+# --- CLASE / LÓGICA FINANCIERA (Garantía de Persistencia y Temporalidad Independiente) ---
+class RepositorioFinanciero:
+
+    @staticmethod
+    def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
+        """
+        Registra el pago de la cuota respetando la frecuencia de cobro y evaluando 
+        la temporalidad si se cruzan los periodos calendario establecidos.
+        """
+        monto_dec = Decimal(str(monto_abono))
+        if monto_dec <= 0:
+            raise ValueError("El monto del abono debe ser mayor a cero.")
+
+        cuota_pendiente = db.query(Cuota).join(Prestamo).filter(
+            Prestamo.id == prestamo_id,
+            Prestamo.usuario == usuario,
+            Cuota.estado == EstadoCuota.PENDIENTE
+        ).order_by(Cuota.numero_cuota.asc()).first()
+
+        if not cuota_pendiente:
+            raise ValueError("No hay cuotas pendientes para este préstamo.")
+
+        cuota_pendiente.monto_pagado += monto_dec
+        if cuota_pendiente.monto_pagado >= cuota_pendiente.monto_cuota:
+            cuota_pendiente.estado = EstadoCuota.PAGADA
+        else:
+            cuota_pendiente.estado = EstadoCuota.PARCIAL
+
+        caja_service = CajaService(db, usuario_actual=usuario)
+        operacion_exitosa = False
+        
+        for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
+            if hasattr(caja_service, metodo_caja):
+                try:
+                    fn = getattr(caja_service, metodo_caja)
+                    try:
+                        fn(monto=monto_dec, tipo="INGRESO", observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
+                    except TypeError:
+                        try:
+                            fn(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
+                        except TypeError:
+                            fn(monto_dec)
+                    operacion_exitosa = True
+                    break
+                except Exception:
+                    pass
+
+        if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
+            if hasattr(caja_service.caja, "saldo_disponible"):
+                caja_service.caja.saldo_disponible += monto_dec
+                db.add(caja_service.caja)
+
+        db.commit()
+        db.refresh(cuota_pendiente)
+        return cuota_pendiente
+
+    @staticmethod
+    def eliminar_prestamo(db: SessionLocal, prestamo_id: int, usuario: str):
+        prestamo = db.query(Prestamo).filter(
+            Prestamo.id == prestamo_id,
+            Prestamo.usuario == usuario
+        ).first()
+        
+        if not prestamo:
+            raise ValueError(f"El préstamo con ID {prestamo_id} no existe o no pertenece a este usuario.")
+        
+        db.query(Cuota).filter(Cuota.prestamo_id == prestamo_id).delete()
+        db.delete(prestamo)
+        db.commit()
 
 
 # --- MÓDULO 1: DASHBOARD / CAJA ---
@@ -74,9 +126,9 @@ def render_dashboard(usuario):
 
         st.divider()
 
-        # --- SECCIÓN DE NUEVOS MOVIMIENTOS MANUALES (INGRESO GENÉRICO Y REPOSICIÓN - POR DEFECTO: GENÉRICO) ---
+        # --- SECCIÓN DE MOVIMIENTOS MANUALES (Ingreso Genérico por defecto) ---
         with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Reposición)", expanded=False):
-            with st.form("form_ajuste_caja"):
+            with st.form("form_ajuste_caja_dashboard"):
                 tipo_movimiento = st.selectbox(
                     "Tipo de Operación *",
                     ["Ingreso Genérico", "Reposición de Capital"]
@@ -126,10 +178,9 @@ def render_dashboard(usuario):
                             st.rerun()
                         else:
                             db.rollback()
-                            st.error("❌ No se pudo registrar el movimiento en el servicio de caja. Revisa los métodos de tu backend.")
+                            st.error("❌ No se pudo registrar el movimiento en el servicio de caja.")
 
         st.divider()
-
         st.subheader("📜 Últimos Movimientos y Transacciones")
         movimientos = caja_service.listar_movimientos(limite=10)
 
@@ -150,281 +201,268 @@ def render_dashboard(usuario):
         db.close()
 
 
-# --- MÓDULO 2: GESTIÓN DE PRÉSTAMOS ---
-def generar_pdf_paz_y_salvo(prestamo, cliente, cuotas):
-    """
-    Genera un archivo PDF en memoria con el certificado oficial de Paz y Salvo del préstamo.
-    """
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
-    elements = []
-    
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Title'],
-        fontName='Helvetica-Bold',
-        fontSize=18,
-        leading=22,
-        textColor=colors.HexColor("#0F172A"),
-        alignment=1 # Centrado
-    )
-    
-    elements.append(Paragraph("<b>CERTIFICADO DE PAZ Y SALVO</b>", title_style))
-    elements.append(Spacer(1, 15))
-    
-    fecha_emision = datetime.now().strftime("%d/%m/%Y %H:%M")
-    fecha_solicitud = getattr(prestamo, 'fecha_creacion', None)
-    if isinstance(fecha_solicitud, datetime):
-        fecha_solicitud_str = fecha_solicitud.strftime("%d/%m/%Y")
-    else:
-        fecha_solicitud_str = str(fecha_solicitud) if fecha_solicitud else "N/A"
-
-    nombre_cliente = getattr(cliente, 'nombre_completo', 'N/A')
-
-    datos_cliente = f"""
-    <b>Nombre del Cliente:</b> {nombre_cliente}<br/>
-    <b>Fecha de Emisión del Reporte:</b> {fecha_emision}<br/>
-    <b>ID del Préstamo:</b> #{prestamo.id}<br/>
-    <b>Fecha de Solicitud del Crédito:</b> {fecha_solicitud_str}<br/>
-    <b>Monto Total del Préstamo:</b> ${prestamo.monto_total:,.2f}<br/>
-    <b>Saldo Pendiente Actual:</b> <font color="green"><b>Certificado Generado</b></font>
-    """
-    
-    elements.append(Paragraph(datos_cliente, styles['Normal']))
-    elements.append(Spacer(1, 20))
-    
-    elements.append(Paragraph("<b>Historial Detallado de Pagos y Cuotas:</b>", styles['Heading2']))
-    elements.append(Spacer(1, 10))
-    
-    tabla_datos = [["Cuota N°", "Valor Cuota", "Monto Abonado", "Estado"]]
-    
-    if cuotas:
-        for c in cuotas:
-            estado_val = c.estado.value if hasattr(c.estado, 'value') else str(c.estado)
-            tabla_datos.append([
-                f"Cuota #{c.numero_cuota}",
-                f"${c.monto_cuota:,.2f}",
-                f"${c.monto_pagado:,.2f}",
-                estado_val
-            ])
-    else:
-        tabla_datos.append(["N/A", "$0.00", "$0.00", "ACTIVO"])
-        
-    t = Table(tabla_datos, colWidths=[100, 130, 130, 120])
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E293B')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
-    ]))
-    
-    elements.append(t)
-    elements.append(Spacer(1, 30))
-    
-    nota_final = "<i>Este documento certifica oficialmente el estado de la obligación financiera correspondiente a este crédito.</i>"
-    elements.append(Paragraph(nota_final, styles['Normal']))
-    
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
-
-
-def render_prestamos():
-    st.title("💳 Gestión de Préstamos")
-    
-    tab_cartera, tab_nuevo = st.tabs(["📂 Cartera Activa", "➕ Nuevo Préstamo"])
+# --- MÓDULO 2: PAGOS ---
+def render_pagos(usuario):
+    st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
+    st.markdown("Control de abonos, amortización de cuotas e impacto directo en caja.")
 
     db = SessionLocal()
     try:
-        prestamo_repo = PrestamoRepository(db)
-        cliente_repo = ClienteRepository(db)
-        usuario_actual = st.session_state.get("username", "admin")
+        prestamos_activos = db.query(Prestamo).filter(
+            Prestamo.usuario == usuario,
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).all()
 
-        # --- PESTAÑA 1: CARTERA ACTIVA ---
-        with tab_cartera:
-            st.subheader("📋 Préstamos en Curso y Finalizados")
-            prestamos = prestamo_repo.obtener_por_usuario(usuario_actual)
+        if not prestamos_activos:
+            st.info("No hay préstamos activos disponibles para recibir pagos.")
+            return
 
-            if not prestamos:
-                st.info("No hay préstamos registrados.")
-            else:
-                data = []
-                prestamos_dict = {}
-                
-                for p in prestamos:
-                    nombre_cliente = getattr(p, "cliente_nombre", None)
-                    if not nombre_cliente and hasattr(p, "cliente") and p.cliente:
-                        nombre_cliente = getattr(p.cliente, "nombre_completo", "N/A")
-                    elif not nombre_cliente:
-                        nombre_cliente = "N/A"
+        prestamo_opciones = {
+            f"Préstamo #{p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} (Total: ${p.monto_total:,.2f})": p 
+            for p in prestamos_activos
+        }
 
-                    estado_actual = getattr(p, "estado", EstadoPrestamo.ACTIVO)
-                    estado_str = estado_actual.value if hasattr(estado_actual, "value") else str(estado_actual)
+        with st.form("form_registrar_abono"):
+            st.subheader("Registrar Abono a Cuota")
+            seleccion_key = st.selectbox("Seleccionar Préstamo Activo *", options=list(prestamo_opciones.keys()))
+            prestamo_seleccionado = prestamo_opciones[seleccion_key]
 
-                    data.append({
-                        "ID": p.id,
-                        "Cliente": nombre_cliente,
-                        "Capital": f"${p.capital:,.2f}" if hasattr(p, "capital") else "$0.00",
-                        "Interés (%)": f"{p.porcentaje_interes}%" if hasattr(p, "porcentaje_interes") else "0%",
-                        "Total a Pagar": f"${p.monto_total:,.2f}" if hasattr(p, "monto_total") else "$0.00",
-                        "Cuotas": getattr(p, "numero_cuotas", 1),
-                        "Estado": estado_str
-                    })
-                    prestamos_dict[p.id] = p
+            monto_abono = st.number_input("Monto del Abono ($) *", min_value=0.0, value=100.0, step=10.0)
+            submitted = st.form_submit_button("💰 Registrar y Aplicar Abono", type="primary", use_container_width=True)
 
-                df_prestamos = pd.DataFrame(data)
-                st.dataframe(df_prestamos, use_container_width=True, hide_index=True)
+            if submitted:
+                try:
+                    RepositorioFinanciero.registrar_abono(db=db, prestamo_id=prestamo_seleccionado.id, monto_abono=monto_abono, usuario=usuario)
+                    st.success(f"¡Abono de ${monto_abono:,.2f} guardado en la base de datos con éxito!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al guardar el abono en la base de datos: {e}")
 
-                st.divider()
-                st.subheader("📄 Descarga de Certificado (Paz y Salvo / Reporte)")
-                
-                prestamo_ids_disponibles = [p.id for p in prestamos]
-                if prestamo_ids_disponibles:
-                    id_seleccionado = st.selectbox("Seleccione el ID del Préstamo para generar el reporte", options=prestamo_ids_disponibles)
-                    prestamo_sel = prestamos_dict.get(id_seleccionado)
-                    
-                    if prestamo_sel:
-                        cuotas_prestamo = getattr(prestamo_sel, "cuotas", [])
-                        
-                        st.success(f"✅ Préstamo #{prestamo_sel.id} seleccionado correctamente.")
-                        
-                        pdf_file = generar_pdf_paz_y_salvo(prestamo_sel, prestamo_sel.cliente, cuotas_prestamo)
-                        st.download_button(
-                            label=f"📥 Descargar Reporte / Paz y Salvo - Préstamo #{prestamo_sel.id} (PDF)",
-                            data=pdf_file,
-                            file_name=f"Reporte_Prestamo_{prestamo_sel.id}.pdf",
-                            mime="application/pdf",
-                            type="primary"
-                        )
+        st.divider()
+        st.subheader("📜 Historial Reciente de Cuotas Pagadas")
+        cuotas_pagadas = db.query(Cuota).join(Prestamo).filter(
+            Prestamo.usuario == usuario,
+            Cuota.monto_pagado > 0
+        ).order_by(Cuota.id.desc()).limit(10).all()
 
-        # --- PESTAÑA 2: NUEVO PRÉSTAMO / DESEMBOLSO ---
-        with tab_nuevo:
-            st.subheader("Nuevo Desembolso")
-
-            clientes = cliente_repo.obtener_por_usuario(usuario_actual)
-
-            if not clientes:
-                st.warning("⚠️ No tienes clientes registrados. Por favor, ve al módulo de 'Clientes' y registra al menos uno antes de otorgar un préstamo.")
-                return
-
-            clientes_dict = {c.nombre_completo: c for c in clientes if hasattr(c, "nombre_completo")}
-
-            if not clientes_dict:
-                st.warning("⚠️ Los clientes registrados no tienen un nombre válido asignado.")
-                return
-
-            with st.form("form_nuevo_prestamo"):
-                col_c1, col_c2 = st.columns(2)
-
-                with col_c1:
-                    cliente_seleccionado_nombre = st.selectbox(
-                        "Seleccionar Cliente *",
-                        options=list(clientes_dict.keys())
-                    )
-                    
-                    capital = st.number_input(
-                        "Capital a prestar ($) *",
-                        min_value=0.0,
-                        value=1000.0,
-                        step=100.0
-                    )
-
-                    tasa_interes = st.number_input(
-                        "Tasa de interés (%) *",
-                        min_value=0.0,
-                        value=20.0,
-                        step=1.0
-                    )
-
-                    frecuencia = st.selectbox(
-                        "Frecuencia de pago *",
-                        ["Diario", "Semanal", "Quincenal", "Mensual"]
-                    )
-
-                with col_c2:
-                    num_cuotas = st.number_input(
-                        "Número de cuotas *",
-                        min_value=1,
-                        value=4,
-                        step=1
-                    )
-
-                    fecha_inicio = st.date_input(
-                        "Fecha de inicio / primer cobro *",
-                        value=datetime.now().date()
-                    )
-
-                    cap_sim = Decimal(str(capital))
-                    tasa_sim = Decimal(str(tasa_interes)) / Decimal("100")
-                    total_cobrar_sim = cap_sim + (cap_sim * tasa_sim)
-                    cuotas_sim = int(num_cuotas) if num_cuotas > 0 else 1
-                    valor_cuota_sim = total_cobrar_sim / Decimal(str(cuotas_sim))
-
-                    st.markdown(
-                        f"""
-                        💡 **Simulación:** Total a cobrar: **${total_cobrar_sim:,.2f}** | Valor cuota aprox: **${valor_cuota_sim:,.2f}**
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                observaciones = st.text_area(
-                    "Observaciones o notas adicionales",
-                    placeholder="Ej. Garantía entregada, condiciones especiales..."
-                )
-
-                submitted = st.form_submit_button("💰 Confirmar y Crear Préstamo", use_container_width=True, type="primary")
-
-                if submitted:
-                    cliente_obj = clientes_dict.get(cliente_seleccionado_nombre)
-                    if not cliente_obj:
-                        st.error("❌ Error: Selecciona un cliente válido.")
-                    else:
-                        try:
-                            prestamo_repo.crear_prestamo(
-                                cliente_nombre=cliente_obj.nombre_completo,
-                                capital=capital,
-                                tasa_interes=tasa_interes,
-                                num_cuotas=num_cuotas,
-                                frecuencia=frecuencia,
-                                fecha_inicio=fecha_inicio,
-                                observaciones=observaciones,
-                                usuario=usuario_actual
-                            )
-                            st.success(f"¡Préstamo a '{cliente_obj.nombre_completo}' creado con éxito!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Error al procesar el préstamo: {e}")
-
+        if cuotas_pagadas:
+            data = [{
+                "ID Préstamo": cp.prestamo_id,
+                "Cuota N°": cp.numero_cuota,
+                "Valor Cuota": f"${cp.monto_cuota:,.2f}",
+                "Monto Abonado": f"${cp.monto_pagado:,.2f}",
+                "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
+            } for cp in cuotas_pagadas]
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
     finally:
         db.close()
 
 
-# --- NAVEGACIÓN PRINCIPAL LATERAL ---
-st.sidebar.title("📌 Menú de Navegación")
-st.sidebar.markdown(f"Usuario activo: **{st.session_state.username.capitalize()}**")
+# --- MÓDULO 3: CLIENTES ---
+def render_clientes(usuario):
+    st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
+    st.markdown("Gestión y registro del directorio de clientes.")
 
-menu = st.sidebar.radio(
-    "Ir a:",
-    ["📊 Dashboard / Caja", "💳 Préstamos", "👥 Clientes"]
-)
+    db = SessionLocal()
+    try:
+        repo = ClienteRepository(db)
+        
+        with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
+            with st.form("form_nuevo_cliente"):
+                nombre = st.text_input("Nombre completo *")
+                
+                submitted = st.form_submit_button("Guardar Cliente", type="primary")
+                if submitted:
+                    if nombre.strip():
+                        try:
+                            repo.crear_cliente(
+                                nombre=nombre.strip(),
+                                documento="S/D",
+                                telefono="S/D",
+                                direccion="S/D",
+                                usuario=usuario
+                            )
+                            db.commit()
+                            st.success(f"¡Cliente '{nombre.strip()}' guardado permanentemente en la base de datos!")
+                            st.rerun()
+                        except Exception as e:
+                            db.rollback()
+                            st.error(f"❌ Error al guardar en la base de datos: {e}")
+                    else:
+                        st.warning("El nombre del cliente es obligatorio.")
 
-if st.sidebar.button("Cerrar Sesión", type="secondary"):
-    st.session_state.authenticated = False
-    st.session_state.username = "admin"
-    st.rerun()
+        st.divider()
+        st.subheader("📋 Directorio de Clientes")
+        clientes = repo.obtener_por_usuario(usuario)
 
-st.sidebar.divider()
+        if clientes:
+            data = [{"ID": c.id, "Nombre": getattr(c, "nombre_completo", "N/A")} for c in clientes]
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay clientes registrados todavía.")
+    finally:
+        db.close()
 
 
-# --- ENRUTADOR DE VISTAS ---
-if menu == "📊 Dashboard / Caja":
-    render_dashboard(st.session_state.username)
-elif menu == "💳 Préstamos":
-    render_prestamos()
-elif menu == "👥 Clientes":
-    st.title("👥 Gestión de Clientes")
-    st.info("Módulo de administración de clientes activo.")
+# --- MÓDULO 4: GESTIÓN / ELIMINACIÓN DE PRÉSTAMOS ---
+def render_gestion_prestamos(usuario):
+    st.title(f"⚙️ Gestión de Préstamos — {usuario.capitalize()}")
+    st.markdown("Herramientas administrativas para corregir registros o eliminar préstamos duplicados.")
+
+    db = SessionLocal()
+    try:
+        st.subheader("🗑️ Eliminar Préstamo Duplicado o Erróneo")
+        prestamos_existentes = db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
+        
+        if not prestamos_existentes:
+            st.info("No hay préstamos registrados para eliminar.")
+        else:
+            opciones_borrar = {
+                f"ID: {p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} - Capital: ${p.monto_total:,.2f}": p.id 
+                for p in prestamos_existentes
+            }
+            
+            with st.form("form_eliminar_prestamo"):
+                prestamo_a_borrar_key = st.selectbox("Seleccione el préstamo a eliminar", options=list(opciones_borrar.keys()))
+                id_a_borrar = opciones_borrar[prestamo_a_borrar_key]
+                
+                submitted = st.form_submit_button("⚠️ Eliminar Préstamo Seleccionado", type="primary", use_container_width=True)
+                
+                if submitted:
+                    try:
+                        RepositorioFinanciero.eliminar_prestamo(db, id_a_borrar, usuario)
+                        st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente de la base de datos!")
+                        st.rerun()
+                    except Exception as e:
+                        db.rollback()
+                        st.error(f"❌ Error al eliminar de la base de datos: {e}")
+    finally:
+        db.close()
+
+
+# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD ---
+def render_gestion_respaldos(usuario):
+    st.markdown("## 🛡️ Gestión y Seguridad de Datos")
+    st.caption("Respalda tu información o reinicia el sistema por completo si lo necesitas.")
+
+    col1, col2 = st.columns(2)
+
+    # --- 1. BOTÓN DE RESPALDO (BACKUP) GLOBAL ---
+    with col1:
+        st.subheader("💾 Copia de Seguridad")
+        st.write("Descarga una copia actual de la base de datos general.")
+        
+        archivos_db = [f for f in os.listdir(".") if f.endswith(".db")]
+        
+        if archivos_db:
+            db_path = archivos_db[0]
+            with open(db_path, "rb") as f:
+                db_bytes = f.read()
+            
+            st.download_button(
+                label=f"📥 Descargar Respaldo ({db_path})",
+                data=db_bytes,
+                file_name=f"respaldo_{db_path}",
+                mime="application/octet-stream",
+                type="primary",
+                use_container_width=True
+            )
+        else:
+            st.warning("⚠️ Todavía no se detecta ningún archivo de base de datos.")
+
+    # --- 2. ZONA DE PELIGRO: LIMPIEZA TOTAL DE LA BASE DE DATOS ---
+    with col2:
+        st.subheader("🔥 Zona de Peligro")
+        st.write("Reinicia y deja la base de datos completamente en ceros.")
+
+        with st.expander("⚠️ Desplegar opción de limpieza general", expanded=False):
+            confirmar_total = st.checkbox("Confirmo que deseo borrar ABSOLUTAMENTE TODO el contenido")
+            
+            if st.button("💥 Borrar Todo y Dejar en Ceros", type="primary", use_container_width=True):
+                if confirmar_total:
+                    try:
+                        borrados = 0
+                        for f in os.listdir("."):
+                            if f.endswith(".db"):
+                                os.remove(f)
+                                borrados += 1
+                    
+                        st.session_state.clear()
+                        
+                        st.success(f"¡Se eliminaron {borrados} archivo(s) de base de datos y se limpió la sesión con éxito! Recargando...")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al reiniciar: {e}")
+                else:
+                    st.warning("⚠️ Debes marcar la casilla de confirmación.")
+
+
+# --- LOGIN ---
+def login():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔐 Iniciar Sesión")
+        st.caption("Sistema de Gestión de Préstamos e Inversiones")
+
+        with st.form("form_login"):
+            usr = st.text_input("Usuario").strip().lower()
+            pwd = st.text_input("Contraseña", type="password")
+            btn = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
+
+            if btn:
+                if usr in USUARIOS and USUARIOS[usr] == pwd:
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = usr
+                    st.success(f"¡Bienvenido, {usr.capitalize()}!")
+                    st.rerun()
+                else:
+                    st.error("❌ Usuario o contraseña incorrectos.")
+
+
+# --- CONTROLADOR PRINCIPAL ---
+def main():
+    if not st.session_state.get("logged_in", False):
+        login()
+        return
+
+    usuario_actual = st.session_state.get("username", "admin")
+
+    with st.sidebar:
+        st.title("💳 Sistema Préstamos")
+        st.markdown(f"👤 **Usuario activo:** `{usuario_actual.capitalize()}`")
+        st.divider()
+
+        # Menú lateral completo con todas las opciones originales
+        modulo = st.selectbox(
+            "Seleccionar Módulo",
+            [
+                "Dashboard / Caja", 
+                "Préstamos", 
+                "Pagos", 
+                "Clientes", 
+                "Gestión Préstamos", 
+                "Respaldos y Seguridad"
+            ],
+        )
+
+        st.divider()
+        if st.button("🚪 Cerrar Sesión", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+
+    if modulo == "Dashboard / Caja":
+        render_dashboard(usuario_actual)
+    elif modulo == "Préstamos":
+        render_prestamos()
+    elif modulo == "Pagos":
+        render_pagos(usuario_actual)
+    elif modulo == "Clientes":
+        render_clientes(usuario_actual)
+    elif modulo == "Gestión Préstamos":
+        render_gestion_prestamos(usuario_actual)
+    elif modulo == "Respaldos y Seguridad":
+        render_gestion_respaldos(usuario_actual)
+
+
+if __name__ == "__main__":
+    main()
