@@ -1,10 +1,11 @@
 """
 main.py
-Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos, Clientes y Gestión de Eliminación (Arquitectura Plana).
+Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos, Clientes y Gestión de Eliminación Independiente.
 """
 
 from datetime import datetime
 from decimal import Decimal
+import os
 import pandas as pd
 import streamlit as st
 
@@ -219,7 +220,6 @@ def render_clientes(usuario):
                 if submitted:
                     if nombre.strip():
                         try:
-                            # Intentar llamar al repositorio y asegurar persistencia con commit
                             repo.crear_cliente(
                                 nombre=nombre.strip(),
                                 documento="S/D",
@@ -227,7 +227,6 @@ def render_clientes(usuario):
                                 direccion="S/D",
                                 usuario=usuario
                             )
-                            # Doble seguridad de commit en la sesión activa de Streamlit
                             db.commit()
                             st.success(f"¡Cliente '{nombre.strip()}' guardado permanentemente en la base de datos!")
                             st.rerun()
@@ -250,40 +249,71 @@ def render_clientes(usuario):
         db.close()
 
 
-# --- MÓDULO 4: GESTIÓN / ELIMINACIÓN DE PRÉSTAMOS ---
+# --- MÓDULO 4: GESTIÓN / RESPALDOS Y ELIMINACIÓN INDEPENDIENTE ---
 def render_gestion_prestamos(usuario):
-    st.title(f"⚙️ Gestión de Préstamos — {usuario.capitalize()}")
-    st.markdown("Herramientas administrativas para corregir registros o eliminar préstamos duplicados.")
+    st.title(f"⚙️ Gestión y Seguridad de Datos — {usuario.capitalize()}")
+    st.markdown("Respalda tu información o administra únicamente tus registros de forma independiente.")
 
-    db = SessionLocal()
-    try:
-        st.subheader("🗑️ Eliminar Préstamo Duplicado o Erróneo")
-        prestamos_existentes = db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
+    db_path = "prestamos_v2.db"
+    col1, col2 = st.columns(2)
+
+    # --- 1. COPIA DE SEGURIDAD GLOBAL (.db) ---
+    with col1:
+        st.subheader("💾 Copia de Seguridad")
+        st.write("Descarga una copia actual de la base de datos para asegurar que nunca pierdas información.")
         
-        if not prestamos_existentes:
-            st.info("No hay préstamos registrados para eliminar.")
-        else:
-            opciones_borrar = {
-                f"ID: {p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} - Capital: ${p.monto_total:,.2f}": p.id 
-                for p in prestamos_existentes
-            }
+        if os.path.exists(db_path):
+            with open(db_path, "rb") as f:
+                db_bytes = f.read()
             
-            with st.form("form_eliminar_prestamo"):
-                prestamo_a_borrar_key = st.selectbox("Seleccione el préstamo a eliminar", options=list(opciones_borrar.keys()))
-                id_a_borrar = opciones_borrar[prestamo_a_borrar_key]
+            st.download_button(
+                label="📥 Descargar Respaldo (.db)",
+                data=db_bytes,
+                file_name="respaldo_prestamos_v2.db",
+                mime="application/octet-stream",
+                type="primary",
+                use_container_width=True
+            )
+        else:
+            st.warning("⚠️ Todavía no se detecta el archivo de la base de datos.")
+
+    # --- 2. ELIMINACIÓN INDEPENDIENTE POR USUARIO ---
+    with col2:
+        st.subheader("🗑️ Eliminar Mis Préstamos")
+        st.write("Elimina permanentemente solo los préstamos registrados bajo tu usuario.")
+
+        db = SessionLocal()
+        try:
+            prestamos_existentes = db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
+            
+            if not prestamos_existentes:
+                st.info("No tienes préstamos registrados para eliminar.")
+            else:
+                opciones_borrar = {
+                    f"ID: {p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} - Capital: ${p.monto_total:,.2f}": p.id 
+                    for p in prestamos_existentes
+                }
                 
-                submitted = st.form_submit_button("⚠️ Eliminar Préstamo Seleccionado", type="primary", use_container_width=True)
-                
-                if submitted:
-                    try:
-                        RepositorioFinanciero.eliminar_prestamo(db, id_a_borrar, usuario)
-                        st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente de la base de datos!")
-                        st.rerun()
-                    except Exception as e:
-                        db.rollback()
-                        st.error(f"❌ Error al eliminar de la base de datos: {e}")
-    finally:
-        db.close()
+                with st.form("form_eliminar_prestamo"):
+                    prestamo_a_borrar_key = st.selectbox("Seleccione el préstamo a eliminar", options=list(opciones_borrar.keys()))
+                    id_a_borrar = opciones_borrar[prestamo_a_borrar_key]
+                    
+                    confirmar_borrado = st.checkbox("Confirmo que deseo eliminar este préstamo y su historial permanentemente")
+                    submitted = st.form_submit_button("❌ Eliminar Mi Préstamo", type="secondary", use_container_width=True)
+                    
+                    if submitted:
+                        if confirmar_borrado:
+                            try:
+                                RepositorioFinanciero.eliminar_prestamo(db, id_a_borrar, usuario)
+                                st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente de tus registros!")
+                                st.rerun()
+                            except Exception as e:
+                                db.rollback()
+                                st.error(f"❌ Error al eliminar de la base de datos: {e}")
+                        else:
+                            st.warning("⚠️ Debes marcar la casilla de confirmación.")
+        finally:
+            db.close()
 
 
 # --- LOGIN ---
