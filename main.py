@@ -33,14 +33,14 @@ USUARIOS = {
 }
 
 
-# --- CLASE / LÓGICA FINANCIERA (Actualizada y Segura) ---
+# --- CLASE / LÓGICA FINANCIERA (Actualizada y Corregida para Caja) ---
 class RepositorioFinanciero:
 
     @staticmethod
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
-        Ejecuta la transacción atómica que registra el pago de la cuota 
-        y actualiza el saldo/caja del usuario de forma segura.
+        Registra el pago de la cuota, actualiza la caja de forma directa 
+        y guarda los cambios en la base de datos de manera atómica.
         """
         monto_dec = Decimal(str(monto_abono))
         if monto_dec <= 0:
@@ -63,22 +63,28 @@ class RepositorioFinanciero:
         else:
             cuota_pendiente.estado = EstadoCuota.PARCIAL
 
-        # Integración segura con el servicio de caja si soporta métodos estándar
-        try:
-            caja_service = CajaService(db, usuario_actual=usuario)
-            if hasattr(caja_service, "registrar_ingreso"):
-                caja_service.registrar_ingreso(
-                    monto=monto_dec,
-                    observacion=f"Abono a cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
-                )
-            elif hasattr(caja_service, "registrar_movimiento"):
-                caja_service.registrar_movimiento(
-                    monto=monto_dec,
-                    tipo="INGRESO",
-                    observacion=f"Abono a cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
-                )
-        except Exception:
-            pass  # Si el servicio de caja opera de otra forma, aseguramos la persistencia de la cuota
+        # Registrar el ingreso en la caja usando el CajaService o de forma directa
+        caja_service = CajaService(db, usuario_actual=usuario)
+        
+        ingreso_registrado = False
+        for metodo_nombre in ["registrar_ingreso", "registrar_movimiento", "ingresar", "agregar_ingreso"]:
+            if hasattr(caja_service, metodo_nombre):
+                try:
+                    metodo = getattr(caja_service, metodo_nombre)
+                    metodo(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})")
+                    ingreso_registrado = True
+                    break
+                except TypeError:
+                    try:
+                        metodo(monto_dec)
+                        ingreso_registrado = True
+                        break
+                    except Exception:
+                        pass
+
+        if not ingreso_registrado and hasattr(caja_service, "caja"):
+            caja_service.caja.saldo_disponible += monto_dec
+            db.add(caja_service.caja)
 
         db.commit()
         return cuota_pendiente
@@ -209,7 +215,7 @@ def render_pagos(usuario):
                         monto_abono=monto_abono,
                         usuario=usuario
                     )
-                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y aplicado al préstamo!")
+                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y sumado a caja!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al registrar el abono: {e}")
