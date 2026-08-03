@@ -213,19 +213,16 @@ def render_clientes(usuario):
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
                 nombre = st.text_input("Nombre completo")
-                documento = st.text_input("Documento / Cédula", value="S/D")
-                telefono = st.text_input("Teléfono", value="S/D")
-                direccion = st.text_input("Dirección", value="S/D")
                 
                 submitted = st.form_submit_button("Guardar Cliente", type="primary")
                 if submitted:
                     if nombre.strip():
                         try:
                             repo.crear_cliente(
-                                nombre=nombre,
-                                documento=documento.strip(),
-                                telefono=telefono.strip(),
-                                direccion=direccion.strip(),
+                                nombre=nombre.strip(),
+                                documento="S/D",
+                                telefono="S/D",
+                                direccion="S/D",
                                 usuario=usuario
                             )
                             st.success(f"¡Cliente '{nombre}' digitalizado con éxito!")
@@ -240,7 +237,7 @@ def render_clientes(usuario):
         clientes = repo.obtener_por_usuario(usuario)
 
         if clientes:
-            data = [{"ID": c.id, "Nombre": getattr(c, "nombre_completo", "N/A"), "Documento": getattr(c, "documento", "N/A"), "Teléfono": getattr(c, "telefono", "N/A")} for c in clientes]
+            data = [{"ID": c.id, "Nombre": getattr(c, "nombre_completo", "N/A")} for c in clientes]
             st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
             st.info("No hay clientes registrados todavía.")
