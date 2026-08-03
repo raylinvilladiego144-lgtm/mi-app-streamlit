@@ -98,7 +98,7 @@ def render_pagos(usuario):
     st.info("Módulo de pagos configurado y listo para enlazar con cuotas.")
 
 
-# --- MÓDULO 3: CLIENTES (CON FORMULARIO DE ESCRITURA) ---
+# --- MÓDULO 3: CLIENTES (CON FORMULARIO Y LISTADO CORREGIDO) ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
     st.markdown("Gestión y registro del directorio de clientes.")
@@ -110,6 +110,7 @@ def render_clientes(usuario):
         # --- FORMULARIO PARA REGISTRAR NUEVO CLIENTE ---
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
+                documento = st.text_input("Documento de identidad", value="S/D")
                 nombre = st.text_input("Nombre completo")
                 telefono = st.text_input("Teléfono / Contacto")
                 direccion = st.text_input("Dirección")
@@ -120,6 +121,7 @@ def render_clientes(usuario):
                         try:
                             repo.crear_cliente(
                                 nombre=nombre,
+                                documento=documento,
                                 telefono=telefono,
                                 direccion=direccion,
                                 usuario=usuario
@@ -144,7 +146,8 @@ def render_clientes(usuario):
             for c in clientes:
                 data.append({
                     "ID": c.id,
-                    "Nombre": getattr(c, "nombre", "N/A"),
+                    "Documento": getattr(c, "documento", "S/D"),
+                    "Nombre": getattr(c, "nombre_completo", "N/A"),  # <--- Corregido al campo real del modelo
                     "Teléfono": getattr(c, "telefono", "N/A"),
                     "Dirección": getattr(c, "direccion", "N/A")
                 })
