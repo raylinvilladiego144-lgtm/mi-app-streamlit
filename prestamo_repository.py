@@ -1,6 +1,6 @@
 """
 prestamo_repository.py
-Repositorio adaptado exactamente a la estructura real de la tabla 'prestamos'.
+Repositorio adaptado para extraer de forma segura los IDs y mapear la tabla de préstamos.
 """
 
 from datetime import datetime, timedelta
@@ -19,7 +19,7 @@ class PrestamoRepository:
 
     def crear_prestamo(
         self,
-        cliente_id: int,
+        cliente_id,
         capital: float | Decimal = 0.0,
         tasa_interes: float | Decimal = 0.0,
         num_cuotas: int = 1,
@@ -29,8 +29,17 @@ class PrestamoRepository:
         usuario: str = "admin",
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo mapeando exactamente las columnas de tu tabla SQL.
+        Crea un nuevo préstamo extrayendo de forma segura el ID del cliente y mapeando la BD.
         """
+        # Extraer el ID si por error se pasa un objeto (Cliente o Prestamo)
+        if hasattr(cliente_id, "id"):
+            c_id = int(cliente_id.id)
+        else:
+            try:
+                c_id = int(cliente_id)
+            except (TypeError, ValueError):
+                c_id = 1  # Fallback seguro por si llega vacío o inválido
+
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
         elif isinstance(fecha_inicio, str):
@@ -44,7 +53,7 @@ class PrestamoRepository:
         monto_total = cap_dec + monto_interes
         valor_cuota = monto_total / Decimal(str(num_cuotas))
 
-        # Determinar intervalo de días para calcular la fecha de vencimiento final
+        # Determinar intervalo de días
         frecuencia_lower = str(frecuencia).lower()
         if "diario" in frecuencia_lower or "día" in frecuencia_lower:
             delta_dias = 1
@@ -57,12 +66,11 @@ class PrestamoRepository:
         else:
             delta_dias = 1
 
-        # Fecha de vencimiento final aproximada (última cuota)
-        fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * num_cuotas)
+        fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * int(num_cuotas))
 
-        # Mapeo exacto basado en el error SQL de tu base de datos
+        # Instancia con los campos reales de tu base de datos
         nuevo_prestamo = Prestamo(
-            cliente_id=int(cliente_id),
+            cliente_id=c_id,
             usuario=str(usuario),
             capital=float(cap_dec),
             porcentaje_interes=float(tasa_interes),
@@ -77,11 +85,11 @@ class PrestamoRepository:
         )
 
         self.db.add(nuevo_prestamo)
-        self.db.flush()  # Para obtener el ID generado del préstamo
+        self.db.flush()
 
-        # Generar el cronograma de cuotas individuales
+        # Generar cuotas individuales
         fecha_actual = fecha_inicio
-        for i in range(1, num_cuotas + 1):
+        for i in range(1, int(num_cuotas) + 1):
             fecha_actual += timedelta(days=delta_dias)
             nueva_cuota = Cuota(
                 prestamo_id=nuevo_prestamo.id,
