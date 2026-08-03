@@ -42,18 +42,30 @@ class PrestamoRepository:
         monto_total = cap_dec + interes_total
         valor_cuota = monto_total / Decimal(str(num_cuotas))
 
-        nuevo_prestamo = Prestamo(
-            cliente_id=cliente_id,
-            capital=cap_dec,
-            tasa_interes=float(tasa_interes),
-            monto_total=monto_total,
-            num_cuotas=num_cuotas,
-            frecuencia=frecuencia,
-            observaciones=observaciones,
-            usuario=usuario,
-            estado=EstadoPrestamo.ACTIVO,
-            fecha_creacion=datetime.utcnow()
-        )
+        # Construcción dinámica para evitar errores de nombres de columnas en el modelo
+        prestamo_data = {
+            "cliente_id": cliente_id,
+            "capital": cap_dec,
+            "monto_total": monto_total,
+            "num_cuotas": num_cuotas,
+            "frecuencia": frecuencia,
+            "observaciones": observaciones,
+            "estado": EstadoPrestamo.ACTIVO,
+            "fecha_creacion": datetime.utcnow()
+        }
+
+        # Asignar la tasa según los atributos reales que soporte el modelo Prestamo
+        if hasattr(Prestamo, "tasa_interes"):
+            prestamo_data["tasa_interes"] = float(tasa_interes)
+        elif hasattr(Prestamo, "tasa"):
+            prestamo_data["tasa"] = float(tasa_interes)
+        elif hasattr(Prestamo, "interes"):
+            prestamo_data["interes"] = float(tasa_interes)
+
+        if hasattr(Prestamo, "usuario"):
+            prestamo_data["usuario"] = usuario
+
+        nuevo_prestamo = Prestamo(**prestamo_data)
 
         self.db.add(nuevo_prestamo)
         self.db.flush()
