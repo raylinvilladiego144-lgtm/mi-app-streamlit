@@ -1,19 +1,20 @@
 """
 main.py
-Punto de entrada principal con Login, base de datos limpia y gestión de préstamos.
+Punto de entrada principal con Login, Dashboard financiero y gestión de préstamos.
 """
 
 from datetime import datetime
-import sqlite3
 import pandas as pd
 import streamlit as st
 
 # --- IMPORTACIÓN DE MÓDULOS PLANOS ---
+from database import SessionLocal
+from caja_service import CajaService
 from prestamos import render_prestamos
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
-    page_title="Gestión de Préstamos",
+    page_title="Gestión de Préstamos e Inversiones",
     page_icon="💳",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -25,88 +26,76 @@ USUARIOS = {
     "raylin": "Barcelona12*",
 }
 
-DB_NAME = "prestamos_v2.db"
 
+# --- MÓDULOS DE LA APLICACIÓN (DASHBOARD) ---
+def render_dashboard(usuario):
+    st.title(f"📊 Dashboard Financiero — {usuario.capitalize()}")
+    st.markdown("Resumen general del estado de caja, capital en la calle y flujos de efectivo.")
 
-# --- INICIALIZACIÓN DE LA BASE DE DATOS ---
-def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS prestamos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario TEXT,
-                cliente TEXT,
-                monto REAL,
-                interes REAL,
-                cuotas INTEGER,
-                fecha TEXT,
-                estado TEXT
+    db = SessionLocal()
+    try:
+        caja_service = CajaService(db, usuario_actual=usuario)
+        resumen = caja_service.obtener_resumen_financiero()
+
+        # --- MÉTRICAS PRINCIPALES ---
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                label="💵 Caja Disponible",
+                value=f"${resumen['caja_disponible']:,.2f}",
+                help="Dinero disponible en efectivo o banco para nuevos préstamos o retiros."
             )
-        """
-        )
-        conn.commit()
 
+        with col2:
+            st.metric(
+                label="📈 Capital Prestado (Activo)",
+                value=f"${resumen['capital_prestado']:,.2f}",
+                help="Saldo pendiente por cobrar en los préstamos activos."
+            )
 
-init_db()
+        with col3:
+            st.metric(
+                label="🏦 Capital Total (Caja + Cartera)",
+                value=f"${resumen['capital_total']:,.2f}",
+                help="Patrimonio total administrado."
+            )
 
+        st.divider()
 
-# --- MÓDULOS DE LA APLICACIÓN ---
-def render_caja(usuario):
-    st.title(f"📦 Módulo de Caja - {usuario.capitalize()}")
-    st.write("Resumen financiero global de la cartera registrada.")
+        # --- SECCIÓN DE MOVIMIENTOS RECIENTES ---
+        st.subheader("📜 Últimos Movimientos y Transacciones")
+        movimientos = caja_service.listar_movimientos(limite=10)
 
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, cliente, monto, interes, cuotas, fecha, estado FROM prestamos WHERE usuario = ?",
-            (usuario,),
-        )
-        rows = cursor.fetchall()
+        if not movimientos:
+            st.info("No hay movimientos financieros registrados todavía en este usuario.")
+        else:
+            data = []
+            for m in movimientos:
+                data.append({
+                    "ID": m.id,
+                    "Fecha": getattr(m, "fecha", "N/A"),
+                    "Tipo": m.tipo_evento.value if hasattr(m.tipo_evento, "value") else str(m.tipo_evento),
+                    "Monto": f"${m.monto:,.2f}" if hasattr(m, "monto") else "$0.00",
+                    "Observación": getattr(m, "observacion", "")
+                })
+            
+            df_movs = pd.DataFrame(data)
+            st.dataframe(df_movs, use_container_width=True, hide_index=True)
 
-    if not rows:
-        st.info("No hay transacciones registradas todavía.")
-    else:
-        df = pd.DataFrame(
-            rows,
-            columns=[
-                "ID",
-                "Cliente",
-                "Monto",
-                "Interés",
-                "Cuotas",
-                "Fecha",
-                "Estado",
-            ],
-        )
-        total_colocado = df["Monto"].sum()
-        st.metric("Capital Total Colocado", f"${total_colocado:,.2f}")
-        st.dataframe(df, use_container_width=True)
+    finally:
+        db.close()
 
 
 def render_pagos(usuario):
     st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
     st.write("Control de abonos y amortización de cuotas.")
-    st.info("Módulo listo para registrar abonos a capital o intereses.")
+    st.info("Módulo de pagos configurado y listo para enlazar con cuotas.")
 
 
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
-
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT cliente FROM prestamos WHERE usuario = ?",
-            (usuario,),
-        )
-        rows = cursor.fetchall()
-
-    if not rows:
-        st.info("No hay clientes registrados en los préstamos.")
-    else:
-        df = pd.DataFrame(rows, columns=["Cliente"])
-        st.dataframe(df, use_container_width=True)
+    st.info("Gestión de directorio de clientes.")
 
 
 # --- LOGIN ---
@@ -147,7 +136,7 @@ def main():
 
         modulo = st.selectbox(
             "Seleccionar Módulo",
-            ["Caja", "Pagos", "Préstamos", "Clientes"],
+            ["Dashboard / Caja", "Préstamos", "Pagos", "Clientes"],
         )
 
         st.divider()
@@ -155,12 +144,12 @@ def main():
             st.session_state.clear()
             st.rerun()
 
-    if modulo == "Caja":
-        render_caja(usuario_actual)
-    elif modulo == "Pagos":
-        render_pagos(usuario_actual)
+    if modulo == "Dashboard / Caja":
+        render_dashboard(usuario_actual)
     elif modulo == "Préstamos":
         render_prestamos()
+    elif modulo == "Pagos":
+        render_pagos(usuario_actual)
     elif modulo == "Clientes":
         render_clientes(usuario_actual)
 
