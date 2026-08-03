@@ -24,12 +24,11 @@ class ClienteRepository:
         usuario: str = "admin",
     ) -> Cliente:
         """
-        Crea y registra un nuevo cliente en la base de datos usando las 
-        columnas exactas del modelo (nombre_completo, documento, etc.).
+        Crea y registra un nuevo cliente en la base de datos.
         """
         cliente_data = {
-            "nombre_completo": nombre,  # Mapea 'nombre' al campo real 'nombre_completo'
-            "documento": documento,     # Incluye el documento obligatorio del modelo
+            "nombre_completo": nombre,
+            "documento": documento,
             "telefono": telefono,
             "direccion": direccion,
         }
@@ -48,13 +47,10 @@ class ClienteRepository:
     def obtener_por_usuario(self, usuario: str) -> list[Cliente]:
         """
         Obtiene la lista de clientes filtrados por el usuario actual.
-        Si la tabla no cuenta con la columna 'usuario', retorna todos los registros.
         """
         query = self.db.query(Cliente)
-        
         if hasattr(Cliente, "usuario"):
             query = query.filter(Cliente.usuario == usuario)
-
         return query.all()
 
     def obtener_todos(self) -> list[Cliente]:
@@ -62,3 +58,9 @@ class ClienteRepository:
         Retorna todos los clientes registrados en el sistema.
         """
         return self.db.query(Cliente).all()
+
+    def listar_todos(self) -> list[Cliente]:
+        """
+        Alias de compatibilidad para que prestamos.py pueda listar los clientes sin errores.
+        """
+        return self.obtener_todos()
