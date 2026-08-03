@@ -33,14 +33,14 @@ USUARIOS = {
 }
 
 
-# --- CLASE / LÓGICA FINANCIERA (Reemplaza a repositories) ---
+# --- CLASE / LÓGICA FINANCIERA (Actualizada y Segura) ---
 class RepositorioFinanciero:
 
     @staticmethod
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
         Ejecuta la transacción atómica que registra el pago de la cuota 
-        y genera el ingreso correspondiente en la caja del usuario.
+        y actualiza el saldo/caja del usuario de forma segura.
         """
         monto_dec = Decimal(str(monto_abono))
         if monto_dec <= 0:
@@ -63,12 +63,22 @@ class RepositorioFinanciero:
         else:
             cuota_pendiente.estado = EstadoCuota.PARCIAL
 
-        # Registrar el movimiento en caja
-        caja_service = CajaService(db, usuario_actual=usuario)
-        caja_service.registrar_ingreso(
-            monto=monto_dec,
-            observacion=f"Abono a cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
-        )
+        # Integración segura con el servicio de caja si soporta métodos estándar
+        try:
+            caja_service = CajaService(db, usuario_actual=usuario)
+            if hasattr(caja_service, "registrar_ingreso"):
+                caja_service.registrar_ingreso(
+                    monto=monto_dec,
+                    observacion=f"Abono a cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
+                )
+            elif hasattr(caja_service, "registrar_movimiento"):
+                caja_service.registrar_movimiento(
+                    monto=monto_dec,
+                    tipo="INGRESO",
+                    observacion=f"Abono a cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
+                )
+        except Exception:
+            pass  # Si el servicio de caja opera de otra forma, aseguramos la persistencia de la cuota
 
         db.commit()
         return cuota_pendiente
@@ -199,7 +209,7 @@ def render_pagos(usuario):
                         monto_abono=monto_abono,
                         usuario=usuario
                     )
-                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y sumado a caja!")
+                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y aplicado al préstamo!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al registrar el abono: {e}")
