@@ -1,6 +1,6 @@
 """
 main.py
-Punto de entrada principal con Login, base de datos SQLite con contextos seguros y gestión de préstamos.
+Punto de entrada principal con Login, base de datos limpia v2 y gestión de préstamos.
 """
 
 import streamlit as st
@@ -22,9 +22,11 @@ USUARIOS = {
     "raylin": "Barcelona12*",
 }
 
+DB_NAME = "prestamos_v2.db"
+
 # --- INICIALIZACIÓN DE LA BASE DE DATOS ---
 def init_db():
-    with sqlite3.connect("loan_management.db") as conn:
+    with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS prestamos (
@@ -47,7 +49,7 @@ def render_caja(usuario):
     st.title(f"📦 Módulo de Caja - {usuario.capitalize()}")
     st.write("Resumen financiero global de la cartera registrada.")
     
-    with sqlite3.connect("loan_management.db") as conn:
+    with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, cliente, monto, interes, cuotas, fecha, estado FROM prestamos WHERE usuario = ?", (usuario,))
         rows = cursor.fetchall()
@@ -86,7 +88,7 @@ def render_prestamos(usuario):
             if not cliente.strip():
                 st.warning("El nombre del cliente es obligatorio.")
             else:
-                with sqlite3.connect("loan_management.db") as conn:
+                with sqlite3.connect(DB_NAME) as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         INSERT INTO prestamos (usuario, cliente, monto, interes, cuotas, fecha, estado)
@@ -99,7 +101,7 @@ def render_prestamos(usuario):
     st.divider()
     st.subheader("Tus Préstamos Registrados")
     
-    with sqlite3.connect("loan_management.db") as conn:
+    with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, cliente, monto, interes, cuotas, fecha, estado FROM prestamos WHERE usuario = ?", (usuario,))
         rows = cursor.fetchall()
@@ -113,7 +115,7 @@ def render_prestamos(usuario):
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
     
-    with sqlite3.connect("loan_management.db") as conn:
+    with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT cliente FROM prestamos WHERE usuario = ?", (usuario,))
         rows = cursor.fetchall()
