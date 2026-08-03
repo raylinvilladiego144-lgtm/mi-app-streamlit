@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 # --- IMPORTACIÓN DE MÓDULOS PLANOS ---
-from database import SessionLocal
+from database import SessionLocal, init_db
 from caja_service import CajaService
 from prestamos import render_prestamos
 
@@ -19,6 +19,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# --- INICIALIZAR LAS TABLAS DE SQLALCHEMY AUTOMÁTICAMENTE ---
+init_db()
 
 # --- CREDENCIALES DE ACCESO ---
 USUARIOS = {
