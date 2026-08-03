@@ -58,7 +58,7 @@ def generar_pdf_paz_y_salvo(prestamo, cliente, cuotas):
     <b>ID del Préstamo:</b> #{prestamo.id}<br/>
     <b>Fecha de Solicitud del Crédito:</b> {fecha_solicitud_str}<br/>
     <b>Monto Total del Préstamo:</b> ${prestamo.monto_total:,.2f}<br/>
-    <b>Saldo Pendiente Actual:</b> <font color="green"><b>$0.00 (PAZ Y SALVO)</b></font>
+    <b>Saldo Pendiente Actual:</b> <font color="green"><b>Certificado Generado</b></font>
     """
     
     elements.append(Paragraph(datos_cliente, styles['Normal']))
@@ -69,14 +69,17 @@ def generar_pdf_paz_y_salvo(prestamo, cliente, cuotas):
     
     tabla_datos = [["Cuota N°", "Valor Cuota", "Monto Abonado", "Estado"]]
     
-    for c in cuotas:
-        estado_val = c.estado.value if hasattr(c.estado, 'value') else str(c.estado)
-        tabla_datos.append([
-            f"Cuota #{c.numero_cuota}",
-            f"${c.monto_cuota:,.2f}",
-            f"${c.monto_pagado:,.2f}",
-            estado_val
-        ])
+    if cuotas:
+        for c in cuotas:
+            estado_val = c.estado.value if hasattr(c.estado, 'value') else str(c.estado)
+            tabla_datos.append([
+                f"Cuota #{c.numero_cuota}",
+                f"${c.monto_cuota:,.2f}",
+                f"${c.monto_pagado:,.2f}",
+                estado_val
+            ])
+    else:
+        tabla_datos.append(["N/A", "$0.00", "$0.00", "ACTIVO"])
         
     t = Table(tabla_datos, colWidths=[100, 130, 130, 120])
     t.setStyle(TableStyle([
@@ -91,7 +94,7 @@ def generar_pdf_paz_y_salvo(prestamo, cliente, cuotas):
     elements.append(t)
     elements.append(Spacer(1, 30))
     
-    nota_final = "<i>Este documento certifica oficialmente que el cliente ha cancelado la totalidad de la obligación financiera correspondiente a este crédito.</i>"
+    nota_final = "<i>Este documento certifica oficialmente el estado de la obligación financiera correspondiente a este crédito.</i>"
     elements.append(Paragraph(nota_final, styles['Normal']))
     
     doc.build(elements)
@@ -146,35 +149,27 @@ def render_prestamos():
                 st.dataframe(df_prestamos, use_container_width=True, hide_index=True)
 
                 st.divider()
-                st.subheader("📄 Descarga de Certificado de Paz y Salvo")
+                st.subheader("📄 Descarga de Certificado (Paz y Salvo / Reporte)")
                 
-                # Selector para descargar el paz y salvo de cualquier préstamo completado
+                # Selector disponible para cualquier préstamo registrado
                 prestamo_ids_disponibles = [p.id for p in prestamos]
                 if prestamo_ids_disponibles:
-                    id_seleccionado = st.selectbox("Seleccione el ID del Préstamo para verificar/descargar Paz y Salvo", options=prestamo_ids_disponibles)
+                    id_seleccionado = st.selectbox("Seleccione el ID del Préstamo para generar el reporte", options=prestamo_ids_disponibles)
                     prestamo_sel = prestamos_dict.get(id_seleccionado)
                     
                     if prestamo_sel:
-                        # Verificar si todas las cuotas están pagadas
                         cuotas_prestamo = getattr(prestamo_sel, "cuotas", [])
-                        todas_pagadas = all(
-                            (c.estado == EstadoCuota.PAGADA or c.monto_pagado >= c.monto_cuota) 
-                            for c in cuotas_prestamo
-                        ) if cuotas_prestamo else False
-
-                        if todas_pagadas or prestamo_sel.estado == EstadoPrestamo.PAGADO:
-                            st.success(f"✅ El Préstamo #{prestamo_sel.id} se encuentra a Paz y Salvo.")
-                            
-                            pdf_file = generar_pdf_paz_y_salvo(prestamo_sel, prestamo_sel.cliente, cuotas_prestamo)
-                            st.download_button(
-                                label=f"📥 Descargar Paz y Salvo - Préstamo #{prestamo_sel.id} (PDF)",
-                                data=pdf_file,
-                                file_name=f"Paz_y_Salvo_Prestamo_{prestamo_sel.id}.pdf",
-                                mime="application/pdf",
-                                type="primary"
-                            )
-                        else:
-                            st.info(f"ℹ️ El Préstamo #{prestamo_sel.id} aún tiene cuotas pendientes o saldo por cobrar. El certificado estará disponible al finalizarlo.")
+                        
+                        st.success(f"✅ Préstamo #{prestamo_sel.id} seleccionado correctamente.")
+                        
+                        pdf_file = generar_pdf_paz_y_salvo(prestamo_sel, prestamo_sel.cliente, cuotas_prestamo)
+                        st.download_button(
+                            label=f"📥 Descargar Reporte / Paz y Salvo - Préstamo #{prestamo_sel.id} (PDF)",
+                            data=pdf_file,
+                            file_name=f"Reporte_Prestamo_{prestamo_sel.id}.pdf",
+                            mime="application/pdf",
+                            type="primary"
+                        )
 
         # --- PESTAÑA 2: NUEVO PRÉSTAMO / DESEMBOLSO ---
         with tab_nuevo:
