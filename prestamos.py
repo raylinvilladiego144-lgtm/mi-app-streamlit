@@ -1,19 +1,12 @@
-"""
-app/pages/prestamos.py
-
-Módulo de gestión de préstamos.
-Consulta préstamos activos, historial y creación de nuevos préstamos.
-"""
-
 from datetime import date
 from decimal import Decimal
 
 import streamlit as st
 
-from app.database.database import SessionLocal
-from app.repositories.cliente_repository import ClienteRepository
-from app.repositories.prestamo_repository import PrestamoRepository
-from app.services.prestamo_service import PrestamoService
+from database import SessionLocal
+from cliente_repository import ClienteRepository
+from prestamo_repository import PrestamoRepository
+from prestamo_service import PrestamoService
 
 
 def render_prestamos():
