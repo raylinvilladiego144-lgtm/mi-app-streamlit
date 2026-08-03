@@ -1,6 +1,6 @@
 """
 main.py
-Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos y Clientes (Arquitectura Plana).
+Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos, Clientes y Gestión de Eliminación (Arquitectura Plana).
 """
 
 from datetime import datetime
@@ -73,6 +73,26 @@ class RepositorioFinanciero:
         db.commit()
         return cuota_pendiente
 
+    @staticmethod
+    def eliminar_prestamo(db: SessionLocal, prestamo_id: int, usuario: str):
+        """
+        Elimina un préstamo y todas sus cuotas asociadas de forma segura validando el usuario.
+        """
+        prestamo = db.query(Prestamo).filter(
+            Prestamo.id == prestamo_id,
+            Prestamo.usuario == usuario
+        ).first()
+        
+        if not prestamo:
+            raise ValueError(f"El préstamo con ID {prestamo_id} no existe o no pertenece a este usuario.")
+        
+        # Eliminar cuotas relacionadas primero
+        db.query(Cuota).filter(Cuota.prestamo_id == prestamo_id).delete()
+        
+        # Eliminar el préstamo
+        db.delete(prestamo)
+        db.commit()
+
 
 # --- MÓDULO 1: DASHBOARD / CAJA ---
 def render_dashboard(usuario):
@@ -141,7 +161,6 @@ def render_pagos(usuario):
 
     db = SessionLocal()
     try:
-        # Selección dinámica de préstamos activos del usuario
         prestamos_activos = db.query(Prestamo).filter(
             Prestamo.usuario == usuario,
             Prestamo.estado == EstadoPrestamo.ACTIVO
@@ -151,7 +170,6 @@ def render_pagos(usuario):
             st.info("No hay préstamos activos disponibles para recibir pagos.")
             return
 
-        # Diccionario para asociar la opción seleccionada con el objeto Préstamo
         prestamo_opciones = {
             f"Préstamo #{p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} (Total: ${p.monto_total:,.2f})": p 
             for p in prestamos_activos
@@ -188,7 +206,6 @@ def render_pagos(usuario):
 
         st.divider()
 
-        # Historial reciente de cuotas con abonos
         st.subheader("📜 Historial Reciente de Cuotas Pagadas")
         cuotas_pagadas = db.query(Cuota).join(Prestamo).filter(
             Prestamo.usuario == usuario,
@@ -268,6 +285,41 @@ def render_clientes(usuario):
         db.close()
 
 
+# --- MÓDULO 4: GESTIÓN / ELIMINACIÓN DE PRÉSTAMOS ---
+def render_gestion_prestamos(usuario):
+    st.title(f"⚙️ Gestión de Préstamos — {usuario.capitalize()}")
+    st.markdown("Herramientas administrativas para corregir registros o eliminar préstamos duplicados.")
+
+    db = SessionLocal()
+    try:
+        st.subheader("🗑️ Eliminar Préstamo Duplicado o Erróneo")
+        prestamos_existentes = db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
+        
+        if not prestamos_existentes:
+            st.info("No hay préstamos registrados para eliminar.")
+        else:
+            opciones_borrar = {
+                f"ID: {p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} - Capital: ${p.monto_total:,.2f}": p.id 
+                for p in prestamos_existentes
+            }
+            
+            with st.form("form_eliminar_prestamo"):
+                prestamo_a_borrar_key = st.selectbox("Seleccione el préstamo a eliminar", options=list(opciones_borrar.keys()))
+                id_a_borrar = opciones_borrar[prestamo_a_borrar_key]
+                
+                submitted = st.form_submit_button("⚠️ Eliminar Préstamo Seleccionado", type="primary", use_container_width=True)
+                
+                if submitted:
+                    try:
+                        RepositorioFinanciero.eliminar_prestamo(db, id_a_borrar, usuario)
+                        st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al eliminar: {e}")
+    finally:
+        db.close()
+
+
 # --- LOGIN ---
 def login():
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -307,7 +359,7 @@ def main():
 
         modulo = st.selectbox(
             "Seleccionar Módulo",
-            ["Dashboard / Caja", "Préstamos", "Pagos", "Clientes"],
+            ["Dashboard / Caja", "Préstamos", "Pagos", "Clientes", "Gestión Préstamos"],
         )
 
         st.divider()
@@ -323,6 +375,8 @@ def main():
         render_pagos(usuario_actual)
     elif modulo == "Clientes":
         render_clientes(usuario_actual)
+    elif modulo == "Gestión Préstamos":
+        render_gestion_prestamos(usuario_actual)
 
 
 if __name__ == "__main__":
