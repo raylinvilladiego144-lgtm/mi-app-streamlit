@@ -29,7 +29,7 @@ class PrestamoRepository:
         usuario: str = "admin",
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo adaptándose dinámicamente a los atributos reales del modelo.
+        Crea un nuevo préstamo y genera su cronograma de cuotas de forma segura.
         """
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
@@ -41,11 +41,11 @@ class PrestamoRepository:
         monto_total = cap_dec + interes_total
         valor_cuota = monto_total / Decimal(str(num_cuotas))
 
-        # Instanciamos el préstamo base requerido
+        # 1. Crear la instancia principal del Préstamo evitando pasar relaciones directamente
         nuevo_prestamo = Prestamo(cliente_id=cliente_id)
 
-        # Asignación dinámica segura para evitar cualquier error de argumentos
-        atributos_a_probar = {
+        # 2. Asignar de forma segura solo columnas escalares (números, textos, fechas)
+        atributos_escalares = {
             "capital": cap_dec,
             "monto": cap_dec,
             "monto_total": monto_total,
@@ -66,14 +66,17 @@ class PrestamoRepository:
             "fecha_inicio": fecha_inicio
         }
 
-        for attr, val in atributos_a_probar.items():
+        for attr, val in atributos_escalares.items():
             if hasattr(Prestamo, attr):
-                setattr(nuevo_prestamo, attr, val)
+                # Nos aseguramos de no asignar enteros a relaciones de colección
+                col_type = getattr(Prestamo, attr)
+                if not hasattr(col_type, "property"):  # Es una columna normal, no una relación
+                    setattr(nuevo_prestamo, attr, val)
 
         self.db.add(nuevo_prestamo)
-        self.db.flush() # Para obtener el ID generado
+        self.db.flush()  # Genera el ID del préstamo sin comprometer la transacción todavía
 
-        # Determinar intervalo de días para las cuotas
+        # 3. Determinar intervalo de días para las cuotas
         frecuencia_lower = str(frecuencia).lower()
         if "diario" in frecuencia_lower or "día" in frecuencia_lower:
             delta_dias = 1
@@ -90,8 +93,10 @@ class PrestamoRepository:
         if isinstance(fecha_actual, str):
             fecha_actual = datetime.strptime(fecha_actual, "%Y-%m-%d").date()
 
-        # Generar el cronograma de cuotas
+        # 4. Generar e insertar el cronograma de cuotas individualmente
         for i in range(1, num_cuotas + 1):
+            nueva_cuota = Cuota(prestamo_id=nuevo_prestamo.id)
+            
             cuota_data = {
                 "prestamo_id": nuevo_prestamo.id,
                 "numero_cuota": i,
@@ -100,12 +105,12 @@ class PrestamoRepository:
                 "fecha_vencimiento": fecha_actual,
                 "estado": EstadoCuota.PENDIENTE
             }
-            
-            # Crear cuota adaptándose también a sus posibles nombres de columnas
-            nueva_cuota = Cuota(prestamo_id=nuevo_prestamo.id)
+
             for c_attr, c_val in cuota_data.items():
                 if hasattr(Cuota, c_attr):
-                    setattr(nueva_cuota, c_attr, c_val)
+                    col_type = getattr(Cuota, c_attr)
+                    if not hasattr(col_type, "property"):
+                        setattr(nueva_cuota, c_attr, c_val)
 
             self.db.add(nueva_cuota)
             fecha_actual += timedelta(days=delta_dias)
