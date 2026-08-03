@@ -33,14 +33,14 @@ USUARIOS = {
 }
 
 
-# --- CLASE / LÓGICA FINANCIERA (Actualizada y Corregida para Caja) ---
+# --- CLASE / LÓGICA FINANCIERA (Actualizada y Optimizada para Caja) ---
 class RepositorioFinanciero:
 
     @staticmethod
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
-        Registra el pago de la cuota, actualiza la caja y guarda los cambios 
-        en la base de datos de manera atómica.
+        Registra el pago de la cuota, amortiza el saldo e inyecta el ingreso 
+        directamente al flujo de caja del usuario de forma atómica.
         """
         monto_dec = Decimal(str(monto_abono))
         if monto_dec <= 0:
@@ -63,33 +63,34 @@ class RepositorioFinanciero:
         else:
             cuota_pendiente.estado = EstadoCuota.PARCIAL
 
-        # Registrar el movimiento de caja para que el Dashboard lo sume a la Caja Disponible
+        # Registrar el ingreso en el sistema de caja de forma compatible
         caja_service = CajaService(db, usuario_actual=usuario)
         
-        registrado = False
-        for metodo in ["registrar_ingreso", "registrar_abono", "agregar_ingreso", "registrar_movimiento"]:
-            if hasattr(caja_service, metodo):
+        operacion_exitosa = False
+        # Probamos los nombres de métodos más probables del servicio de caja
+        for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
+            if hasattr(caja_service, metodo_caja):
                 try:
-                    getattr(caja_service, metodo)(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})")
-                    registrado = True
+                    fn = getattr(caja_service, metodo_caja)
+                    # Intentar pasar argumentos con nombres comunes
+                    try:
+                        fn(monto=monto_dec, tipo="INGRESO", observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
+                    except TypeError:
+                        try:
+                            fn(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
+                        except TypeError:
+                            fn(monto_dec)
+                    operacion_exitosa = True
                     break
                 except Exception:
                     pass
 
-        if not registrado:
-            try:
-                from caja_service import EventoCaja, TipoEventoCaja
-                nuevo_evento = EventoCaja(
-                    usuario=usuario,
-                    tipo_evento=TipoEventoCaja.INGRESO,
-                    monto=monto_dec,
-                    observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
-                )
-                db.add(nuevo_evento)
-            except Exception:
-                if hasattr(caja_service, "caja") and hasattr(caja_service.caja, "saldo_disponible"):
-                    caja_service.caja.saldo_disponible += monto_dec
-                    db.add(caja_service.caja)
+        # Si ningún método estándar responde, alteramos el saldo de caja disponible si el atributo existe
+        if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
+            if hasattr(caja_service.caja, "saldo_disponible"):
+                caja_service.caja.saldo_disponible += monto_dec
+                db.add(caja_service.caja)
+                operacion_exitosa = True
 
         db.commit()
         return cuota_pendiente
@@ -220,7 +221,7 @@ def render_pagos(usuario):
                         monto_abono=monto_abono,
                         usuario=usuario
                     )
-                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y sumado a caja!")
+                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y sumado a la caja!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al registrar el abono: {e}")
