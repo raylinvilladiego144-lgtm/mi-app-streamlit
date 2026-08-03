@@ -1,6 +1,6 @@
 """
 prestamo_repository.py
-Repositorio sincronizado exactamente con la estructura de modelos SQLAlchemy.
+Repositorio sincronizado que utiliza únicamente el nombre completo del cliente.
 """
 
 from datetime import datetime, timedelta
@@ -19,7 +19,7 @@ class PrestamoRepository:
 
     def crear_prestamo(
         self,
-        cliente_id,
+        cliente_nombre,
         capital: float | Decimal = 0.0,
         tasa_interes: float | Decimal = 0.0,
         num_cuotas: int = 1,
@@ -29,20 +29,12 @@ class PrestamoRepository:
         usuario: str = "admin",
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo y genera su cronograma de cuotas exacto.
+        Crea un nuevo préstamo usando únicamente el nombre completo del cliente.
         """
-        if cliente_id is None:
-            raise ValueError("Error: Debes seleccionar un cliente válido.")
+        if not cliente_nombre:
+            raise ValueError("Error: Debes ingresar o seleccionar el nombre completo del cliente.")
 
-        if hasattr(cliente_id, "id"):
-            if cliente_id.id is None:
-                raise ValueError("Error: El cliente seleccionado no tiene un ID válido.")
-            c_id = int(cliente_id.id)
-        else:
-            try:
-                c_id = int(cliente_id)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"Error: Identificador de cliente inválido: {cliente_id}") from exc
+        nombre_cliente = str(cliente_nombre).strip()
 
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
@@ -72,7 +64,7 @@ class PrestamoRepository:
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
         nuevo_prestamo = Prestamo(
-            cliente_id=c_id,
+            cliente_nombre=nombre_cliente,
             usuario=str(usuario or "admin"),
             capital=cap_dec,
             porcentaje_interes=Decimal(str(tasa_interes or 0.0)),
