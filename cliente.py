@@ -9,7 +9,7 @@ import enum
 from sqlalchemy import String, Text, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database.base import Base
+from base import Base
 
 
 class EstadoCliente(str, enum.Enum):
