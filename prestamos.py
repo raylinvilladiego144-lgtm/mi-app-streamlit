@@ -36,7 +36,7 @@ def render_prestamos():
             else:
                 data = []
                 for p in prestamos:
-                    # Mostrar únicamente el nombre del cliente (evitando cédulas o datos extra)
+                    # Mostrar únicamente el nombre del cliente
                     nombre_cliente = getattr(p, "cliente_nombre", None)
                     if not nombre_cliente and hasattr(p, "cliente") and p.cliente:
                         nombre_cliente = getattr(p.cliente, "nombre_completo", "N/A")
@@ -142,7 +142,8 @@ def render_prestamos():
                     else:
                         try:
                             caja_service = CajaService(db, usuario_actual=usuario_actual)
-                            caja_disponible = caja_service.obtener_caja_disponible()
+                            resumen_caja = caja_service.obtener_resumen_financiero()
+                            caja_disponible = Decimal(str(resumen_caja.get("caja_disponible", 0.0)))
 
                             if Decimal(str(capital)) > caja_disponible:
                                 st.error(f"❌ Fondos insuficientes en caja. Caja disponible: ${caja_disponible:,.2f}")
