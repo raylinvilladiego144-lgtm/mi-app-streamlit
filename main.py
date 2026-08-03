@@ -98,7 +98,7 @@ def render_pagos(usuario):
     st.info("Módulo de pagos configurado y listo para enlazar con cuotas.")
 
 
-# --- MÓDULO 3: CLIENTES (CON FORMULARIO Y LISTADO CORREGIDO) ---
+# --- MÓDULO 3: CLIENTES (SOLO NOMBRE COMPLETO) ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
     st.markdown("Gestión y registro del directorio de clientes.")
@@ -110,10 +110,7 @@ def render_clientes(usuario):
         # --- FORMULARIO PARA REGISTRAR NUEVO CLIENTE ---
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
-                documento = st.text_input("Documento de identidad", value="S/D")
                 nombre = st.text_input("Nombre completo")
-                telefono = st.text_input("Teléfono / Contacto")
-                direccion = st.text_input("Dirección")
                 
                 submitted = st.form_submit_button("Guardar Cliente", type="primary")
                 if submitted:
@@ -121,9 +118,9 @@ def render_clientes(usuario):
                         try:
                             repo.crear_cliente(
                                 nombre=nombre,
-                                documento=documento,
-                                telefono=telefono,
-                                direccion=direccion,
+                                documento="S/D",
+                                telefono="S/D",
+                                direccion="S/D",
                                 usuario=usuario
                             )
                             st.success(f"¡Cliente '{nombre}' registrado con éxito!")
@@ -146,10 +143,7 @@ def render_clientes(usuario):
             for c in clientes:
                 data.append({
                     "ID": c.id,
-                    "Documento": getattr(c, "documento", "S/D"),
-                    "Nombre": getattr(c, "nombre_completo", "N/A"),  # <--- Corregido al campo real del modelo
-                    "Teléfono": getattr(c, "telefono", "N/A"),
-                    "Dirección": getattr(c, "direccion", "N/A")
+                    "Nombre": getattr(c, "nombre_completo", "N/A")
                 })
             
             df_clientes = pd.DataFrame(data)
