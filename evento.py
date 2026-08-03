@@ -11,7 +11,7 @@ import enum
 from sqlalchemy import String, Text, DateTime, Numeric, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database.base import Base
+from base import Base
 
 
 class TipoEvento(str, enum.Enum):
