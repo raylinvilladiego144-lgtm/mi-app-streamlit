@@ -1,6 +1,6 @@
 """
 main.py
-Punto de entrada principal con Login, base de datos SQLite y gestión de préstamos.
+Punto de entrada principal con Login, base de datos SQLite robusta y gestión de préstamos.
 """
 
 import streamlit as st
@@ -26,7 +26,6 @@ USUARIOS = {
 def init_db():
     conn = sqlite3.connect("loan_management.db")
     cursor = conn.cursor()
-    # Tabla de Préstamos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS prestamos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,20 +49,22 @@ def render_caja(usuario):
     st.write("Resumen financiero global de la cartera registrada.")
     
     conn = sqlite3.connect("loan_management.db")
-    df = pd.read_sql_query("SELECT * FROM prestamos WHERE usuario = ?", conn, params=(usuario,))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, cliente, monto, interes, cuotas, fecha, estado FROM prestamos WHERE usuario = ?", (usuario,))
+    rows = cursor.fetchall()
     conn.close()
     
-    if df.empty:
+    if not rows:
         st.info("No hay transacciones registradas todavía.")
     else:
-        total_colocado = df["monto"].sum()
+        df = pd.DataFrame(rows, columns=["ID", "Cliente", "Monto", "Interés", "Cuotas", "Fecha", "Estado"])
+        total_colocado = df["Monto"].sum()
         st.metric("Capital Total Colocado", f"${total_colocado:,.2f}")
         st.dataframe(df, use_container_width=True)
 
 def render_pagos(usuario):
     st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
     st.write("Control de abonos y amortización de cuotas.")
-    # Aquí puedes listar los pagos asociados
     st.info("Módulo listo para registrar abonos a capital o intereses.")
 
 def render_prestamos(usuario):
@@ -100,24 +101,32 @@ def render_prestamos(usuario):
 
     st.divider()
     st.subheader("Tus Préstamos Registrados")
+    
     conn = sqlite3.connect("loan_management.db")
-    df = pd.read_sql_query("SELECT id, cliente, monto, interes, cuotas, fecha, estado FROM prestamos WHERE usuario = ?", conn, params=(usuario,))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, cliente, monto, interes, cuotas, fecha, estado FROM prestamos WHERE usuario = ?", (usuario,))
+    rows = cursor.fetchall()
     conn.close()
     
-    if df.empty:
+    if not rows:
         st.info("Aún no tienes préstamos digitalizados.")
     else:
+        df = pd.DataFrame(rows, columns=["ID", "Cliente", "Monto", "Interés", "Cuotas", "Fecha", "Estado"])
         st.dataframe(df, use_container_width=True)
 
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
+    
     conn = sqlite3.connect("loan_management.db")
-    df = pd.read_sql_query("SELECT DISTINCT cliente FROM prestamos WHERE usuario = ?", conn, params=(usuario,))
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT cliente FROM prestamos WHERE usuario = ?", (usuario,))
+    rows = cursor.fetchall()
     conn.close()
     
-    if df.empty:
+    if not rows:
         st.info("No hay clientes registrados en los préstamos.")
     else:
+        df = pd.DataFrame(rows, columns=["Cliente"])
         st.dataframe(df, use_container_width=True)
 
 # --- LOGIN ---
