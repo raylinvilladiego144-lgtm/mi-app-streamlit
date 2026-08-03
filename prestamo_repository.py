@@ -1,6 +1,6 @@
 """
 prestamo_repository.py
-Repositorio adaptado para extraer de forma segura los IDs y mapear la tabla de préstamos.
+Repositorio blindado para la gestión de préstamos y validación segura de IDs.
 """
 
 from datetime import datetime, timedelta
@@ -19,7 +19,7 @@ class PrestamoRepository:
 
     def crear_prestamo(
         self,
-        cliente_id,
+        cliente_id=None,
         capital: float | Decimal = 0.0,
         tasa_interes: float | Decimal = 0.0,
         num_cuotas: int = 1,
@@ -29,24 +29,29 @@ class PrestamoRepository:
         usuario: str = "admin",
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo extrayendo de forma segura el ID del cliente y mapeando la BD.
+        Crea un nuevo préstamo validando y asegurando que los parámetros no sean None.
         """
-        # Extraer el ID si por error se pasa un objeto (Cliente o Prestamo)
+        # Validación estricta para evitar errores si cliente_id llega nulo
+        if cliente_id is None:
+            raise ValueError("Debes seleccionar un cliente válido para registrar el préstamo.")
+
         if hasattr(cliente_id, "id"):
             c_id = int(cliente_id.id)
         else:
             try:
                 c_id = int(cliente_id)
-            except (TypeError, ValueError):
-                c_id = 1  # Fallback seguro por si llega vacío o inválido
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"El ID del cliente proporcionado no es válido: {cliente_id}") from exc
 
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
         elif isinstance(fecha_inicio, str):
             fecha_inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d").date()
 
-        cap_dec = Decimal(str(capital))
-        tasa_dec = Decimal(str(tasa_interes)) / Decimal("100")
+        # Asegurar valores numéricos seguros
+        cap_dec = Decimal(str(capital or 0.0))
+        tasa_dec = Decimal(str(tasa_interes or 0.0)) / Decimal("100")
+        num_cuotas = int(num_cuotas or 1)
 
         # Cálculos financieros
         monto_interes = cap_dec * tasa_dec
@@ -54,7 +59,7 @@ class PrestamoRepository:
         valor_cuota = monto_total / Decimal(str(num_cuotas))
 
         # Determinar intervalo de días
-        frecuencia_lower = str(frecuencia).lower()
+        frecuencia_lower = str(frecuencia or "diario").lower()
         if "diario" in frecuencia_lower or "día" in frecuencia_lower:
             delta_dias = 1
         elif "semanal" in frecuencia_lower:
@@ -66,22 +71,22 @@ class PrestamoRepository:
         else:
             delta_dias = 1
 
-        fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * int(num_cuotas))
+        fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * num_cuotas)
 
         # Instancia con los campos reales de tu base de datos
         nuevo_prestamo = Prestamo(
             cliente_id=c_id,
-            usuario=str(usuario),
+            usuario=str(usuario or "admin"),
             capital=float(cap_dec),
-            porcentaje_interes=float(tasa_interes),
+            porcentaje_interes=float(tasa_interes or 0.0),
             monto_interes=float(monto_interes),
             monto_total=float(monto_total),
-            numero_cuotas=int(num_cuotas),
-            modalidad=str(frecuencia).upper(),
+            numero_cuotas=num_cuotas,
+            modalidad=str(frecuencia or "DIARIO").upper(),
             fecha_inicio=fecha_inicio,
             fecha_vencimiento=fecha_vencimiento_final,
             estado="ACTIVO",
-            observaciones=str(observaciones)
+            observaciones=str(observaciones or "")
         )
 
         self.db.add(nuevo_prestamo)
@@ -89,7 +94,7 @@ class PrestamoRepository:
 
         # Generar cuotas individuales
         fecha_actual = fecha_inicio
-        for i in range(1, int(num_cuotas) + 1):
+        for i in range(1, num_cuotas + 1):
             fecha_actual += timedelta(days=delta_dias)
             nueva_cuota = Cuota(
                 prestamo_id=nuevo_prestamo.id,
