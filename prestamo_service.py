@@ -1,5 +1,5 @@
 """
-app/services/prestamo_service.py
+prestamo_service.py
 
 Servicio de dominio para la gestión de préstamos,
 cronogramas, pagos y liquidaciones.
@@ -11,7 +11,7 @@ from typing import Tuple
 
 from sqlalchemy.orm import Session
 
-from app.models.prestamo import (
+from prestamo import (
     Prestamo,
     Cuota,
     EstadoPrestamo,
@@ -19,12 +19,12 @@ from app.models.prestamo import (
     ModalidadInteres,
 )
 
-from app.models.evento import (
+from evento import (
     EventoFinanciero,
     TipoEvento,
 )
 
-from app.repositories.prestamo_repository import (
+from prestamo_repository import (
     PrestamoRepository,
 )
 
