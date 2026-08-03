@@ -1,17 +1,19 @@
 """
 main.py
-Punto de entrada principal con Login, Dashboard financiero, Préstamos y Clientes.
+Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos y Clientes (Arquitectura Plana).
 """
 
 from datetime import datetime
+from decimal import Decimal
 import pandas as pd
 import streamlit as st
 
-# --- IMPORTACIÓN DE MÓDULOS PLANOS ---
+# --- IMPORTACIÓN DE MÓDULOS PLANOS EXISTENTES ---
 from database import SessionLocal, init_db
 from caja_service import CajaService
 from prestamos import render_prestamos
 from cliente_repository import ClienteRepository
+from prestamo import Prestamo, Cuota, EstadoPrestamo, EstadoCuota
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -29,6 +31,47 @@ USUARIOS = {
     "simon": "12345",
     "raylin": "Barcelona12*",
 }
+
+
+# --- CLASE / LÓGICA FINANCIERA (Reemplaza a repositories) ---
+class RepositorioFinanciero:
+
+    @staticmethod
+    def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
+        """
+        Ejecuta la transacción atómica que registra el pago de la cuota 
+        y genera el ingreso correspondiente en la caja del usuario.
+        """
+        monto_dec = Decimal(str(monto_abono))
+        if monto_dec <= 0:
+            raise ValueError("El monto del abono debe ser mayor a cero.")
+
+        # Buscar cuotas pendientes de este préstamo
+        cuota_pendiente = db.query(Cuota).join(Prestamo).filter(
+            Prestamo.id == prestamo_id,
+            Prestamo.usuario == usuario,
+            Cuota.estado == EstadoCuota.PENDIENTE
+        ).order_by(Cuota.numero_cuota.asc()).first()
+
+        if not cuota_pendiente:
+            raise ValueError("No hay cuotas pendientes para este préstamo.")
+
+        # Actualizar cuota
+        cuota_pendiente.monto_pagado += monto_dec
+        if cuota_pendiente.monto_pagado >= cuota_pendiente.monto_cuota:
+            cuota_pendiente.estado = EstadoCuota.PAGADA
+        else:
+            cuota_pendiente.estado = EstadoCuota.PARCIAL
+
+        # Registrar el movimiento en caja
+        caja_service = CajaService(db, usuario_actual=usuario)
+        caja_service.registrar_ingreso(
+            monto=monto_dec,
+            observacion=f"Abono a cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
+        )
+
+        db.commit()
+        return cuota_pendiente
 
 
 # --- MÓDULO 1: DASHBOARD / CAJA ---
@@ -94,11 +137,85 @@ def render_dashboard(usuario):
 # --- MÓDULO 2: PAGOS ---
 def render_pagos(usuario):
     st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
-    st.write("Control de abonos y amortización de cuotas.")
-    st.info("Módulo de pagos configurado y listo para enlazar con cuotas.")
+    st.markdown("Control de abonos, amortización de cuotas e impacto directo en caja.")
+
+    db = SessionLocal()
+    try:
+        # Selección dinámica de préstamos activos del usuario
+        prestamos_activos = db.query(Prestamo).filter(
+            Prestamo.usuario == usuario,
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).all()
+
+        if not prestamos_activos:
+            st.info("No hay préstamos activos disponibles para recibir pagos.")
+            return
+
+        # Diccionario para asociar la opción seleccionada con el objeto Préstamo
+        prestamo_opciones = {
+            f"Préstamo #{p.id} - Cliente: {getattr(p.cliente, 'nombre_completo', 'N/A')} (Total: ${p.monto_total:,.2f})": p 
+            for p in prestamos_activos
+        }
+
+        with st.form("form_registrar_abono"):
+            st.subheader("Registrar Abono a Cuota")
+            
+            seleccion_key = st.selectbox("Seleccionar Préstamo Activo *", options=list(prestamo_opciones.keys()))
+            prestamo_seleccionado = prestamo_opciones[seleccion_key]
+
+            monto_abono = st.number_input(
+                "Monto del Abono ($) *",
+                min_value=0.0,
+                value=100.0,
+                step=10.0,
+                help="Ingrese el valor que el cliente está abonando."
+            )
+
+            submitted = st.form_submit_button("💰 Registrar y Aplicar Abono", type="primary", use_container_width=True)
+
+            if submitted:
+                try:
+                    RepositorioFinanciero.registrar_abono(
+                        db=db,
+                        prestamo_id=prestamo_seleccionado.id,
+                        monto_abono=monto_abono,
+                        usuario=usuario
+                    )
+                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y sumado a caja!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al registrar el abono: {e}")
+
+        st.divider()
+
+        # Historial reciente de cuotas con abonos
+        st.subheader("📜 Historial Reciente de Cuotas Pagadas")
+        cuotas_pagadas = db.query(Cuota).join(Prestamo).filter(
+            Prestamo.usuario == usuario,
+            Cuota.monto_pagado > 0
+        ).order_by(Cuota.id.desc()).limit(10).all()
+
+        if not cuotas_pagadas:
+            st.info("No hay pagos registrados recientemente.")
+        else:
+            data = []
+            for cp in cuotas_pagadas:
+                data.append({
+                    "ID Préstamo": cp.prestamo_id,
+                    "Cuota N°": cp.numero_cuota,
+                    "Valor Cuota": f"${cp.monto_cuota:,.2f}",
+                    "Monto Abonado": f"${cp.monto_pagado:,.2f}",
+                    "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
+                })
+            
+            df_pagos = pd.DataFrame(data)
+            st.dataframe(df_pagos, use_container_width=True, hide_index=True)
+
+    finally:
+        db.close()
 
 
-# --- MÓDULO 3: CLIENTES (SOLO NOMBRE COMPLETO) ---
+# --- MÓDULO 3: CLIENTES ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
     st.markdown("Gestión y registro del directorio de clientes.")
@@ -107,7 +224,6 @@ def render_clientes(usuario):
     try:
         repo = ClienteRepository(db)
         
-        # --- FORMULARIO PARA REGISTRAR NUEVO CLIENTE ---
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
                 nombre = st.text_input("Nombre completo")
@@ -132,12 +248,11 @@ def render_clientes(usuario):
 
         st.divider()
 
-        # --- LISTADO DE CLIENTES REGISTRADOS ---
         st.subheader("📋 Directorio de Clientes")
         clientes = repo.obtener_por_usuario(usuario)
 
         if not clientes:
-            st.info("No hay clientes registrados todavía. Usa el formulario de arriba para agregar uno.")
+            st.info("No hay clientes registrados todavía.")
         else:
             data = []
             for c in clientes:
