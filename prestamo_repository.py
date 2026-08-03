@@ -1,12 +1,13 @@
 """
 prestamo_repository.py
-Repositorio sincronizado que utiliza únicamente el nombre completo del cliente.
+Repositorio sincronizado que gestiona el cliente por su nombre de forma compatible.
 """
 
 from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy.orm import Session
 from prestamo import Prestamo, Cuota, EstadoPrestamo, ModalidadInteres, EstadoCuota
+from cliente import Cliente  # Asegúrate de importar tu modelo Cliente
 
 
 class PrestamoRepository:
@@ -29,12 +30,25 @@ class PrestamoRepository:
         usuario: str = "admin",
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo usando únicamente el nombre completo del cliente.
+        Crea un nuevo préstamo asociándolo mediante el nombre del cliente.
         """
         if not cliente_nombre:
             raise ValueError("Error: Debes ingresar o seleccionar el nombre completo del cliente.")
 
-        nombre_cliente = str(cliente_nombre).strip()
+        nombre_limpio = str(cliente_nombre).strip()
+
+        # Buscar si el cliente ya existe en la tabla de clientes por su nombre o crearlo de forma interna
+        cliente_obj = self.db.query(Cliente).filter(Cliente.nombre_completo == nombre_limpio).first()
+        if not cliente_obj:
+            cliente_obj = Cliente(
+                nombre_completo=nombre_limpio,
+                documento="S/D",
+                telefono="S/D",
+                direccion="S/D",
+                usuario=str(usuario or "admin")
+            )
+            self.db.add(cliente_obj)
+            self.db.flush()
 
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
@@ -63,8 +77,9 @@ class PrestamoRepository:
 
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
+        # Usamos cliente_id del objeto cliente creado/encontrado para cumplir con el modelo SQLAlchemy
         nuevo_prestamo = Prestamo(
-            cliente_nombre=nombre_cliente,
+            cliente_id=cliente_obj.id,
             usuario=str(usuario or "admin"),
             capital=cap_dec,
             porcentaje_interes=Decimal(str(tasa_interes or 0.0)),
