@@ -1,5 +1,5 @@
 """
-app/models/cliente.py
+cliente.py
 Modelo ORM para la entidad Cliente.
 """
 
@@ -31,14 +31,11 @@ class Cliente(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     
-    # 🔒 Quitamos unique=True para permitir que distintos usuarios registren el mismo documento si es necesario
     documento: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    
     nombre_completo: Mapped[str] = mapped_column(String(150), index=True, nullable=False)
     telefono: Mapped[str] = mapped_column(String(30), nullable=False)
     direccion: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     
-    # 🔒 CAMPO CLAVE: Identificador del usuario propietario del registro
     usuario: Mapped[str] = mapped_column(String(50), default="admin", index=True, nullable=False)
 
     estado: Mapped[EstadoCliente] = mapped_column(
