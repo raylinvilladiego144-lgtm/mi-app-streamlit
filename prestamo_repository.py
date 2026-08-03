@@ -1,13 +1,13 @@
 """
 prestamo_repository.py
-Repositorio sincronizado que gestiona el cliente por su nombre de forma compatible.
+Repositorio con validación para evitar duplicar préstamos idénticos al mismo cliente.
 """
 
 from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy.orm import Session
 from prestamo import Prestamo, Cuota, EstadoPrestamo, ModalidadInteres, EstadoCuota
-from cliente import Cliente  # Asegúrate de importar tu modelo Cliente
+from cliente import Cliente
 
 
 class PrestamoRepository:
@@ -30,14 +30,17 @@ class PrestamoRepository:
         usuario: str = "admin",
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo asociándolo mediante el nombre del cliente.
+        Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente.
         """
         if not cliente_nombre:
             raise ValueError("Error: Debes ingresar o seleccionar el nombre completo del cliente.")
 
         nombre_limpio = str(cliente_nombre).strip()
+        cap_dec = Decimal(str(capital or 0.0))
+        tasa_dec = Decimal(str(tasa_interes or 0.0)) / Decimal("100")
+        cuotas_totales = int(num_cuotas or 1)
 
-        # Buscar si el cliente ya existe en la tabla de clientes por su nombre o crearlo de forma interna
+        # Buscar o crear el cliente único por nombre
         cliente_obj = self.db.query(Cliente).filter(Cliente.nombre_completo == nombre_limpio).first()
         if not cliente_obj:
             cliente_obj = Cliente(
@@ -50,14 +53,21 @@ class PrestamoRepository:
             self.db.add(cliente_obj)
             self.db.flush()
 
+        # Validación opcional: Verificar si ya tiene un préstamo activo exactamente igual
+        prestamo_existente = self.db.query(Prestamo).filter(
+            Prestamo.cliente_id == cliente_obj.id,
+            Prestamo.capital == cap_dec,
+            Prestamo.porcentaje_interes == Decimal(str(tasa_interes or 0.0)),
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).first()
+
+        if prestamo_existente:
+            return prestamo_existente  # Retorna el existente en lugar de duplicarlo
+
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
         elif isinstance(fecha_inicio, str):
             fecha_inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d").date()
-
-        cap_dec = Decimal(str(capital or 0.0))
-        tasa_dec = Decimal(str(tasa_interes or 0.0)) / Decimal("100")
-        cuotas_totales = int(num_cuotas or 1)
 
         monto_interes = cap_dec * tasa_dec
         monto_total = cap_dec + monto_interes
@@ -77,7 +87,6 @@ class PrestamoRepository:
 
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
-        # Usamos cliente_id del objeto cliente creado/encontrado para cumplir con el modelo SQLAlchemy
         nuevo_prestamo = Prestamo(
             cliente_id=cliente_obj.id,
             usuario=str(usuario or "admin"),
