@@ -18,16 +18,18 @@ class ClienteRepository:
     def crear_cliente(
         self,
         nombre: str,
-        telefono: str | None = None,
+        telefono: str,
         direccion: str | None = None,
+        documento: str = "S/D",
         usuario: str = "admin",
     ) -> Cliente:
         """
-        Crea y registra un nuevo cliente en la base de datos.
+        Crea y registra un nuevo cliente en la base de datos usando las 
+        columnas exactas del modelo (nombre_completo, documento, etc.).
         """
-        # Verificamos si el modelo Cliente posee el atributo 'usuario' para asignarlo de forma segura
         cliente_data = {
-            "nombre": nombre,
+            "nombre_completo": nombre,  # Mapea 'nombre' al campo real 'nombre_completo'
+            "documento": documento,     # Incluye el documento obligatorio del modelo
             "telefono": telefono,
             "direccion": direccion,
         }
