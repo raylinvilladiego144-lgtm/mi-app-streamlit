@@ -11,7 +11,6 @@ import streamlit as st
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
-from caja_service import CajaService
 
 
 def render_prestamos():
@@ -141,25 +140,19 @@ def render_prestamos():
                         st.error("❌ Error: Selecciona un cliente válido.")
                     else:
                         try:
-                            caja_service = CajaService(db, usuario_actual=usuario_actual)
-                            resumen_caja = caja_service.obtener_resumen_financiero()
-                            caja_disponible = Decimal(str(resumen_caja.get("caja_disponible", 0.0)))
-
-                            if Decimal(str(capital)) > caja_disponible:
-                                st.error(f"❌ Fondos insuficientes en caja. Caja disponible: ${caja_disponible:,.2f}")
-                            else:
-                                prestamo_repo.crear_prestamo(
-                                    cliente_nombre=cliente_obj.nombre_completo,
-                                    capital=capital,
-                                    tasa_interes=tasa_interes,
-                                    num_cuotas=num_cuotas,
-                                    frecuencia=frecuencia,
-                                    fecha_inicio=fecha_inicio,
-                                    observaciones=observaciones,
-                                    usuario=usuario_actual
-                                )
-                                st.success(f"¡Préstamo a '{cliente_obj.nombre_completo}' creado con éxito!")
-                                st.rerun()
+                            # Se elimina la validación de caja para permitir el desembolso directo
+                            prestamo_repo.crear_prestamo(
+                                cliente_nombre=cliente_obj.nombre_completo,
+                                capital=capital,
+                                tasa_interes=tasa_interes,
+                                num_cuotas=num_cuotas,
+                                frecuencia=frecuencia,
+                                fecha_inicio=fecha_inicio,
+                                observaciones=observaciones,
+                                usuario=usuario_actual
+                            )
+                            st.success(f"¡Préstamo a '{cliente_obj.nombre_completo}' creado con éxito!")
+                            st.rerun()
                         except Exception as e:
                             st.error(f"❌ Error al procesar el préstamo: {e}")
 
