@@ -20,11 +20,11 @@ class PrestamoRepository:
     def crear_prestamo(
         self,
         cliente_id: int,
-        capital: float | Decimal,
-        tasa_interes: float | Decimal,
-        num_cuotas: int,
-        frecuencia: str,
-        fecha_inicio,
+        capital: float | Decimal = 0.0,
+        tasa_interes: float | Decimal = 0.0,
+        num_cuotas: int = 1,
+        frecuencia: str = "Diario",
+        fecha_inicio = None,
         observaciones: str = "",
         usuario: str = "admin",
     ) -> Prestamo:
@@ -32,6 +32,9 @@ class PrestamoRepository:
         Crea un nuevo préstamo, calcula los intereses totales, genera el cronograma 
         de cuotas de forma automática y lo guarda en la base de datos.
         """
+        if fecha_inicio is None:
+            fecha_inicio = datetime.now().date()
+
         cap_dec = Decimal(str(capital))
         tasa_dec = Decimal(str(tasa_interes)) / Decimal("100")
 
