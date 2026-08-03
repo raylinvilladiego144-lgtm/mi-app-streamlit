@@ -33,14 +33,14 @@ USUARIOS = {
 }
 
 
-# --- CLASE / LÓGICA FINANCIERA (Actualizada y Robusta) ---
+# --- CLASE / LÓGICA FINANCIERA (Garantía de Persistencia) ---
 class RepositorioFinanciero:
 
     @staticmethod
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
         Registra el pago de la cuota, amortiza el saldo e inyecta el ingreso 
-        directamente al flujo de caja del usuario de forma atómica.
+        directamente al flujo de caja del usuario guardando los cambios de forma permanente.
         """
         monto_dec = Decimal(str(monto_abono))
         if monto_dec <= 0:
@@ -86,6 +86,7 @@ class RepositorioFinanciero:
                 db.add(caja_service.caja)
 
         db.commit()
+        db.refresh(cuota_pendiente)
         return cuota_pendiente
 
     @staticmethod
@@ -176,10 +177,10 @@ def render_pagos(usuario):
             if submitted:
                 try:
                     RepositorioFinanciero.registrar_abono(db=db, prestamo_id=prestamo_seleccionado.id, monto_abono=monto_abono, usuario=usuario)
-                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito!")
+                    st.success(f"¡Abono de ${monto_abono:,.2f} guardado en la base de datos con éxito!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ Error al registrar el abono: {e}")
+                    st.error(f"❌ Error al guardar el abono en la base de datos: {e}")
 
         st.divider()
         st.subheader("📜 Historial Reciente de Cuotas Pagadas")
@@ -212,12 +213,13 @@ def render_clientes(usuario):
         
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
-                nombre = st.text_input("Nombre completo")
+                nombre = st.text_input("Nombre completo *")
                 
                 submitted = st.form_submit_button("Guardar Cliente", type="primary")
                 if submitted:
                     if nombre.strip():
                         try:
+                            # Intentar llamar al repositorio y asegurar persistencia con commit
                             repo.crear_cliente(
                                 nombre=nombre.strip(),
                                 documento="S/D",
@@ -225,10 +227,13 @@ def render_clientes(usuario):
                                 direccion="S/D",
                                 usuario=usuario
                             )
-                            st.success(f"¡Cliente '{nombre}' digitalizado con éxito!")
+                            # Doble seguridad de commit en la sesión activa de Streamlit
+                            db.commit()
+                            st.success(f"¡Cliente '{nombre.strip()}' guardado permanentemente en la base de datos!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Error al digitalizar cliente: {e}")
+                            db.rollback()
+                            st.error(f"❌ Error al guardar en la base de datos: {e}")
                     else:
                         st.warning("El nombre del cliente es obligatorio.")
 
@@ -272,10 +277,11 @@ def render_gestion_prestamos(usuario):
                 if submitted:
                     try:
                         RepositorioFinanciero.eliminar_prestamo(db, id_a_borrar, usuario)
-                        st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente!")
+                        st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente de la base de datos!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Error al eliminar: {e}")
+                        db.rollback()
+                        st.error(f"❌ Error al eliminar de la base de datos: {e}")
     finally:
         db.close()
 
