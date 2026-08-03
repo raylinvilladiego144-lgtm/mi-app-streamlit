@@ -42,19 +42,28 @@ class PrestamoRepository:
         monto_total = cap_dec + interes_total
         valor_cuota = monto_total / Decimal(str(num_cuotas))
 
-        # Construcción dinámica para evitar errores de nombres de columnas en el modelo
+        # Construcción dinámica para adaptarnos a los nombres de columnas reales del modelo Prestamo
         prestamo_data = {
             "cliente_id": cliente_id,
             "capital": cap_dec,
             "monto_total": monto_total,
-            "num_cuotas": num_cuotas,
             "frecuencia": frecuencia,
             "observaciones": observaciones,
             "estado": EstadoPrestamo.ACTIVO,
             "fecha_creacion": datetime.utcnow()
         }
 
-        # Asignar la tasa según los atributos reales que soporte el modelo Prestamo
+        # Asignar el número de cuotas según el atributo real que soporte el modelo
+        if hasattr(Prestamo, "num_cuotas"):
+            prestamo_data["num_cuotas"] = num_cuotas
+        elif hasattr(Prestamo, "numero_cuotas"):
+            prestamo_data["numero_cuotas"] = num_cuotas
+        elif hasattr(Prestamo, "cuotas"):
+            prestamo_data["cuotas"] = num_cuotas
+        elif hasattr(Prestamo, "plazo"):
+            prestamo_data["plazo"] = num_cuotas
+
+        # Asignar la tasa de interés según el atributo real que soporte el modelo
         if hasattr(Prestamo, "tasa_interes"):
             prestamo_data["tasa_interes"] = float(tasa_interes)
         elif hasattr(Prestamo, "tasa"):
