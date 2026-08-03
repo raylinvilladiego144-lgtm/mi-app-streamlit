@@ -33,7 +33,7 @@ USUARIOS = {
 }
 
 
-# --- CLASE / LÓGICA FINANCIERA (Actualizada y Optimizada para Caja) ---
+# --- CLASE / LÓGICA FINANCIERA (Actualizada y Robusta) ---
 class RepositorioFinanciero:
 
     @staticmethod
@@ -46,7 +46,6 @@ class RepositorioFinanciero:
         if monto_dec <= 0:
             raise ValueError("El monto del abono debe ser mayor a cero.")
 
-        # Buscar cuotas pendientes de este préstamo
         cuota_pendiente = db.query(Cuota).join(Prestamo).filter(
             Prestamo.id == prestamo_id,
             Prestamo.usuario == usuario,
@@ -56,23 +55,19 @@ class RepositorioFinanciero:
         if not cuota_pendiente:
             raise ValueError("No hay cuotas pendientes para este préstamo.")
 
-        # Actualizar cuota
         cuota_pendiente.monto_pagado += monto_dec
         if cuota_pendiente.monto_pagado >= cuota_pendiente.monto_cuota:
             cuota_pendiente.estado = EstadoCuota.PAGADA
         else:
             cuota_pendiente.estado = EstadoCuota.PARCIAL
 
-        # Registrar el ingreso en el sistema de caja de forma compatible
         caja_service = CajaService(db, usuario_actual=usuario)
-        
         operacion_exitosa = False
-        # Probamos los nombres de métodos más probables del servicio de caja
+        
         for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
             if hasattr(caja_service, metodo_caja):
                 try:
                     fn = getattr(caja_service, metodo_caja)
-                    # Intentar pasar argumentos con nombres comunes
                     try:
                         fn(monto=monto_dec, tipo="INGRESO", observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
                     except TypeError:
@@ -85,21 +80,16 @@ class RepositorioFinanciero:
                 except Exception:
                     pass
 
-        # Si ningún método estándar responde, alteramos el saldo de caja disponible si el atributo existe
         if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
             if hasattr(caja_service.caja, "saldo_disponible"):
                 caja_service.caja.saldo_disponible += monto_dec
                 db.add(caja_service.caja)
-                operacion_exitosa = True
 
         db.commit()
         return cuota_pendiente
 
     @staticmethod
     def eliminar_prestamo(db: SessionLocal, prestamo_id: int, usuario: str):
-        """
-        Elimina un préstamo y todas sus cuotas asociadas de forma segura validando el usuario.
-        """
         prestamo = db.query(Prestamo).filter(
             Prestamo.id == prestamo_id,
             Prestamo.usuario == usuario
@@ -108,10 +98,7 @@ class RepositorioFinanciero:
         if not prestamo:
             raise ValueError(f"El préstamo con ID {prestamo_id} no existe o no pertenece a este usuario.")
         
-        # Eliminar cuotas relacionadas primero
         db.query(Cuota).filter(Cuota.prestamo_id == prestamo_id).delete()
-        
-        # Eliminar el préstamo
         db.delete(prestamo)
         db.commit()
 
@@ -126,33 +113,17 @@ def render_dashboard(usuario):
         caja_service = CajaService(db, usuario_actual=usuario)
         resumen = caja_service.obtener_resumen_financiero()
 
-        # --- MÉTRICAS PRINCIPALES ---
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric(
-                label="💵 Caja Disponible",
-                value=f"${resumen['caja_disponible']:,.2f}",
-                help="Dinero disponible en efectivo o banco para nuevos préstamos o retiros."
-            )
-
+            st.metric(label="💵 Caja Disponible", value=f"${resumen['caja_disponible']:,.2f}")
         with col2:
-            st.metric(
-                label="📈 Capital Prestado (Activo)",
-                value=f"${resumen['capital_prestado']:,.2f}",
-                help="Saldo pendiente por cobrar en los préstamos activos."
-            )
-
+            st.metric(label="📈 Capital Prestado (Activo)", value=f"${resumen['capital_prestado']:,.2f}")
         with col3:
-            st.metric(
-                label="🏦 Capital Total (Caja + Cartera)",
-                value=f"${resumen['capital_total']:,.2f}",
-                help="Patrimonio total administrado."
-            )
+            st.metric(label="🏦 Capital Total (Caja + Cartera)", value=f"${resumen['capital_total']:,.2f}")
 
         st.divider()
 
-        # --- SECCIÓN DE MOVIMIENTOS RECIENTES ---
         st.subheader("📜 Últimos Movimientos y Transacciones")
         movimientos = caja_service.listar_movimientos(limite=10)
 
@@ -168,10 +139,7 @@ def render_dashboard(usuario):
                     "Monto": f"${m.monto:,.2f}" if hasattr(m, "monto") else "$0.00",
                     "Observación": getattr(m, "observacion", "")
                 })
-            
-            df_movs = pd.DataFrame(data)
-            st.dataframe(df_movs, use_container_width=True, hide_index=True)
-
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
     finally:
         db.close()
 
@@ -199,57 +167,36 @@ def render_pagos(usuario):
 
         with st.form("form_registrar_abono"):
             st.subheader("Registrar Abono a Cuota")
-            
             seleccion_key = st.selectbox("Seleccionar Préstamo Activo *", options=list(prestamo_opciones.keys()))
             prestamo_seleccionado = prestamo_opciones[seleccion_key]
 
-            monto_abono = st.number_input(
-                "Monto del Abono ($) *",
-                min_value=0.0,
-                value=100.0,
-                step=10.0,
-                help="Ingrese el valor que el cliente está abonando."
-            )
-
+            monto_abono = st.number_input("Monto del Abono ($) *", min_value=0.0, value=100.0, step=10.0)
             submitted = st.form_submit_button("💰 Registrar y Aplicar Abono", type="primary", use_container_width=True)
 
             if submitted:
                 try:
-                    RepositorioFinanciero.registrar_abono(
-                        db=db,
-                        prestamo_id=prestamo_seleccionado.id,
-                        monto_abono=monto_abono,
-                        usuario=usuario
-                    )
-                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito y sumado a la caja!")
+                    RepositorioFinanciero.registrar_abono(db=db, prestamo_id=prestamo_seleccionado.id, monto_abono=monto_abono, usuario=usuario)
+                    st.success(f"¡Abono de ${monto_abono:,.2f} registrado con éxito!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al registrar el abono: {e}")
 
         st.divider()
-
         st.subheader("📜 Historial Reciente de Cuotas Pagadas")
         cuotas_pagadas = db.query(Cuota).join(Prestamo).filter(
             Prestamo.usuario == usuario,
             Cuota.monto_pagado > 0
         ).order_by(Cuota.id.desc()).limit(10).all()
 
-        if not cuotas_pagadas:
-            st.info("No hay pagos registrados recientemente.")
-        else:
-            data = []
-            for cp in cuotas_pagadas:
-                data.append({
-                    "ID Préstamo": cp.prestamo_id,
-                    "Cuota N°": cp.numero_cuota,
-                    "Valor Cuota": f"${cp.monto_cuota:,.2f}",
-                    "Monto Abonado": f"${cp.monto_pagado:,.2f}",
-                    "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
-                })
-            
-            df_pagos = pd.DataFrame(data)
-            st.dataframe(df_pagos, use_container_width=True, hide_index=True)
-
+        if cuotas_pagadas:
+            data = [{
+                "ID Préstamo": cp.prestamo_id,
+                "Cuota N°": cp.numero_cuota,
+                "Valor Cuota": f"${cp.monto_cuota:,.2f}",
+                "Monto Abonado": f"${cp.monto_pagado:,.2f}",
+                "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
+            } for cp in cuotas_pagadas]
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
     finally:
         db.close()
 
@@ -266,6 +213,9 @@ def render_clientes(usuario):
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
                 nombre = st.text_input("Nombre completo")
+                documento = st.text_input("Documento / Cédula", value="S/D")
+                telefono = st.text_input("Teléfono", value="S/D")
+                direccion = st.text_input("Dirección", value="S/D")
                 
                 submitted = st.form_submit_button("Guardar Cliente", type="primary")
                 if submitted:
@@ -273,36 +223,27 @@ def render_clientes(usuario):
                         try:
                             repo.crear_cliente(
                                 nombre=nombre,
-                                documento="S/D",
-                                telefono="S/D",
-                                direccion="S/D",
+                                documento=documento.strip(),
+                                telefono=telefono.strip(),
+                                direccion=direccion.strip(),
                                 usuario=usuario
                             )
-                            st.success(f"¡Cliente '{nombre}' registrado con éxito!")
+                            st.success(f"¡Cliente '{nombre}' digitalizado con éxito!")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error al guardar: {e}")
+                            st.error(f"❌ Error al digitalizar cliente: {e}")
                     else:
                         st.warning("El nombre del cliente es obligatorio.")
 
         st.divider()
-
         st.subheader("📋 Directorio de Clientes")
         clientes = repo.obtener_por_usuario(usuario)
 
-        if not clientes:
-            st.info("No hay clientes registrados todavía.")
+        if clientes:
+            data = [{"ID": c.id, "Nombre": getattr(c, "nombre_completo", "N/A"), "Documento": getattr(c, "documento", "N/A"), "Teléfono": getattr(c, "telefono", "N/A")} for c in clientes]
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
-            data = []
-            for c in clientes:
-                data.append({
-                    "ID": c.id,
-                    "Nombre": getattr(c, "nombre_completo", "N/A")
-                })
-            
-            df_clientes = pd.DataFrame(data)
-            st.dataframe(df_clientes, use_container_width=True, hide_index=True)
-
+            st.info("No hay clientes registrados todavía.")
     finally:
         db.close()
 
@@ -337,7 +278,7 @@ def render_gestion_prestamos(usuario):
                         st.success(f"¡Préstamo con ID {id_a_borrar} eliminado exitosamente!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error al eliminar: {e}")
+                        st.error(f"❌ Error al eliminar: {e}")
     finally:
         db.close()
 
@@ -352,9 +293,7 @@ def login():
         with st.form("form_login"):
             usr = st.text_input("Usuario").strip().lower()
             pwd = st.text_input("Contraseña", type="password")
-            btn = st.form_submit_button(
-                "Ingresar", type="primary", use_container_width=True
-            )
+            btn = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
 
             if btn:
                 if usr in USUARIOS and USUARIOS[usr] == pwd:
