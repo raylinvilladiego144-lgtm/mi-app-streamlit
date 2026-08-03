@@ -1,5 +1,5 @@
 """
-app/services/caja_service.py
+caja_service.py
 
 Servicio encargado de calcular el estado financiero de la caja,
 capital disponible, saldo pendiente por cobrar en préstamos y
@@ -12,11 +12,11 @@ from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.models.evento import (
+from evento import (
     EventoFinanciero,
     TipoEvento,
 )
-from app.models.prestamo import (
+from prestamo import (
     Prestamo,
     EstadoPrestamo,
     EstadoCuota,
