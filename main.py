@@ -39,8 +39,8 @@ class RepositorioFinanciero:
     @staticmethod
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
-        Registra el pago de la cuota, actualiza la caja de forma directa 
-        y guarda los cambios en la base de datos de manera atómica.
+        Registra el pago de la cuota, actualiza la caja y guarda los cambios 
+        en la base de datos de manera atómica.
         """
         monto_dec = Decimal(str(monto_abono))
         if monto_dec <= 0:
@@ -63,28 +63,33 @@ class RepositorioFinanciero:
         else:
             cuota_pendiente.estado = EstadoCuota.PARCIAL
 
-        # Registrar el ingreso en la caja usando el CajaService o de forma directa
+        # Registrar el movimiento de caja para que el Dashboard lo sume a la Caja Disponible
         caja_service = CajaService(db, usuario_actual=usuario)
         
-        ingreso_registrado = False
-        for metodo_nombre in ["registrar_ingreso", "registrar_movimiento", "ingresar", "agregar_ingreso"]:
-            if hasattr(caja_service, metodo_nombre):
+        registrado = False
+        for metodo in ["registrar_ingreso", "registrar_abono", "agregar_ingreso", "registrar_movimiento"]:
+            if hasattr(caja_service, metodo):
                 try:
-                    metodo = getattr(caja_service, metodo_nombre)
-                    metodo(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})")
-                    ingreso_registrado = True
+                    getattr(caja_service, metodo)(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})")
+                    registrado = True
                     break
-                except TypeError:
-                    try:
-                        metodo(monto_dec)
-                        ingreso_registrado = True
-                        break
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
-        if not ingreso_registrado and hasattr(caja_service, "caja"):
-            caja_service.caja.saldo_disponible += monto_dec
-            db.add(caja_service.caja)
+        if not registrado:
+            try:
+                from caja_service import EventoCaja, TipoEventoCaja
+                nuevo_evento = EventoCaja(
+                    usuario=usuario,
+                    tipo_evento=TipoEventoCaja.INGRESO,
+                    monto=monto_dec,
+                    observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo ID: {prestamo_id})"
+                )
+                db.add(nuevo_evento)
+            except Exception:
+                if hasattr(caja_service, "caja") and hasattr(caja_service.caja, "saldo_disponible"):
+                    caja_service.caja.saldo_disponible += monto_dec
+                    db.add(caja_service.caja)
 
         db.commit()
         return cuota_pendiente
