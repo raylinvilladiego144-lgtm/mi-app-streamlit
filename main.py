@@ -41,42 +41,73 @@ class RepositorioFinanciero:
     @staticmethod
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
-        Registra el pago de la cuota respetando la frecuencia de cobro y evaluando 
-        la temporalidad si se cruzan los periodos calendario establecidos.
+        Distribuye de forma inteligente el monto abonado a través de las cuotas pendientes 
+        en orden cronológico (maneja pagos exactos, parciales y abonos múltiples/adelantados).
         """
-        monto_dec = Decimal(str(monto_abono))
-        if monto_dec <= 0:
+        monto_restante = Decimal(str(monto_abono))
+        if monto_restante <= 0:
             raise ValueError("El monto del abono debe ser mayor a cero.")
 
-        cuota_pendiente = db.query(Cuota).join(Prestamo).filter(
+        # Verificar que el préstamo pertenece al usuario
+        prestamo = db.query(Prestamo).filter(
             Prestamo.id == prestamo_id,
-            Prestamo.usuario == usuario,
-            Cuota.estado == EstadoCuota.PENDIENTE
-        ).order_by(Cuota.numero_cuota.asc()).first()
+            Prestamo.usuario == usuario
+        ).first()
 
-        if not cuota_pendiente:
-            raise ValueError("No hay cuotas pendientes para este préstamo.")
+        if not prestamo:
+            raise ValueError("El préstamo seleccionado no existe o no pertenece al usuario activo.")
 
-        cuota_pendiente.monto_pagado += monto_dec
-        if cuota_pendiente.monto_pagado >= cuota_pendiente.monto_cuota:
-            cuota_pendiente.estado = EstadoCuota.PAGADA
-        else:
-            cuota_pendiente.estado = EstadoCuota.PARCIAL
+        # Obtener todas las cuotas pendientes o parciales ordenadas por número de cuota
+        cuotas_pendientes = db.query(Cuota).filter(
+            Cuota.prestamo_id == prestamo_id,
+            Cuota.estado.in_([EstadoCuota.PENDIENTE, EstadoCuota.PARCIAL])
+        ).order_by(Cuota.numero_cuota.asc()).all()
 
+        if not cuotas_pendientes:
+            raise ValueError("No hay cuotas pendientes o parciales para este préstamo. ¡El crédito está totalmente al día o pagado!")
+
+        cuotas_afectadas = []
+
+        # Distribución inteligente del dinero ingresado
+        for cuota in cuotas_pendientes:
+            if monto_restante <= 0:
+                break
+
+            # Cuánto falta por pagar de esta cuota específica
+            saldo_pendiente_cuota = cuota.monto_cuota - cuota.monto_pagado
+
+            if monto_restante >= saldo_pendiente_cuota:
+                # El abono cubre por completo lo que falta de esta cuota (o la supera)
+                monto_restante -= saldo_pendiente_cuota
+                cuota.monto_pagado = cuota.monto_cuota
+                cuota.estado = EstadoCuota.PAGADA
+            else:
+                # El abono es menor al saldo pendiente (pago parcial inteligente)
+                cuota.monto_pagado += monto_restante
+                cuota.estado = EstadoCuota.PARCIAL
+                monto_restante = Decimal("0.00")
+
+            db.add(cuota)
+            cuotas_afectadas.append(cuota.numero_cuota)
+
+        # Registrar el movimiento de ingreso en la caja general del usuario
         caja_service = CajaService(db, usuario_actual=usuario)
         operacion_exitosa = False
         
+        detalle_cuotas_str = ", ".join([str(c) for c in cuotas_afectadas])
+        obs_caja = f"Abono inteligente aplicado a cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo_id})"
+
         for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
             if hasattr(caja_service, metodo_caja):
                 try:
                     fn = getattr(caja_service, metodo_caja)
                     try:
-                        fn(monto=monto_dec, tipo="INGRESO", observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
+                        fn(monto=Decimal(str(monto_abono)), tipo="INGRESO", observacion=obs_caja)
                     except TypeError:
                         try:
-                            fn(monto=monto_dec, observacion=f"Abono cuota #{cuota_pendiente.numero_cuota} (Préstamo #{prestamo_id})")
+                            fn(monto=Decimal(str(monto_abono)), observacion=obs_caja)
                         except TypeError:
-                            fn(monto_dec)
+                            fn(Decimal(str(monto_abono)))
                     operacion_exitosa = True
                     break
                 except Exception:
@@ -84,12 +115,11 @@ class RepositorioFinanciero:
 
         if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
             if hasattr(caja_service.caja, "saldo_disponible"):
-                caja_service.caja.saldo_disponible += monto_dec
+                caja_service.caja.saldo_disponible += Decimal(str(monto_abono))
                 db.add(caja_service.caja)
 
         db.commit()
-        db.refresh(cuota_pendiente)
-        return cuota_pendiente
+        return cuotas_afectadas
 
     @staticmethod
     def eliminar_prestamo(db: SessionLocal, prestamo_id: int, usuario: str):
@@ -205,7 +235,7 @@ def render_dashboard(usuario):
 # --- MÓDULO 2: PAGOS ---
 def render_pagos(usuario):
     st.title(f"💳 Módulo de Pagos - {usuario.capitalize()}")
-    st.markdown("Control de abonos, amortización de cuotas e impacto directo en caja.")
+    st.markdown("Control de abonos, amortización inteligente de cuotas y calendario de pagos.")
 
     db = SessionLocal()
     try:
@@ -228,16 +258,60 @@ def render_pagos(usuario):
             seleccion_key = st.selectbox("Seleccionar Préstamo Activo *", options=list(prestamo_opciones.keys()))
             prestamo_seleccionado = prestamo_opciones[seleccion_key]
 
-            monto_abono = st.number_input("Monto del Abono ($) *", min_value=0.0, value=100.0, step=10.0)
-            submitted = st.form_submit_button("💰 Registrar y Aplicar Abono", type="primary", use_container_width=True)
+            monto_abono = st.number_input("Monto del Abono ($) *", min_value=0.0, value=25000.0, step=1000.0)
+            submitted = st.form_submit_button("💰 Registrar y Aplicar Abono Inteligente", type="primary", use_container_width=True)
 
             if submitted:
                 try:
-                    RepositorioFinanciero.registrar_abono(db=db, prestamo_id=prestamo_seleccionado.id, monto_abono=monto_abono, usuario=usuario)
-                    st.success(f"¡Abono de ${monto_abono:,.2f} guardado en la base de datos con éxito!")
+                    cuotas_afectadas = RepositorioFinanciero.registrar_abono(
+                        db=db, 
+                        prestamo_id=prestamo_seleccionado.id, 
+                        monto_abono=monto_abono, 
+                        usuario=usuario
+                    ]
+                    st.success(f"¡Abono de ${monto_abono:,.2f} aplicado con éxito a la(s) cuota(s) #{', '.join(map(str, cuotas_afectadas))}!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ Error al guardar el abono en la base de datos: {e}")
+                    st.error(f"❌ Error al registrar el abono en la base de datos: {e}")
+
+        st.divider()
+        st.subheader("📅 Calendario de Cuotas del Préstamo Seleccionado")
+        
+        # Selector para ver el calendario del préstamo activo que el usuario elija
+        prestamo_calendario_key = st.selectbox(
+            "Seleccionar Préstamo para Ver Calendario de 30 Espacios", 
+            options=list(prestamo_opciones.keys()),
+            key="select_calendario_prestamo"
+        )
+        prestamo_cal = prestamo_opciones[prestamo_calendario_key]
+
+        # Cargar las cuotas asociadas a este préstamo
+        cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == prestamo_cal.id).all()
+        mapa_cuotas = {c.numero_cuota: c for c in cuotas_prestamo}
+
+        # Renderizar en filas de 6 columnas (5 filas x 6 columnas = 30 espacios exactos)
+        TOTAL_ESPACIOS = 30
+        for fila in range(5):
+            cols = st.columns(6)
+            for col_idx in range(6):
+                num_espacio = (fila * 6) + col_idx + 1
+                
+                with cols[col_idx]:
+                    cuota_obj = mapa_cuotas.get(num_espacio)
+                    
+                    if cuota_obj:
+                        estado_str = cuota_obj.estado.value if hasattr(cuota_obj.estado, "value") else str(cuota_obj.estado)
+                        monto_pagado = float(cuota_obj.monto_pagado)
+                        monto_cuota = float(cuota_obj.monto_cuota)
+                        
+                        if estado_str == "PAGADA" or monto_pagado >= monto_cuota:
+                            st.success(f"**C{num_espacio}**\n✅ ${monto_pagado:,.0f}")
+                        elif monto_pagado > 0:
+                            st.warning(f"**C{num_espacio}**\n⚠️ ${monto_pagado:,.0f} / ${monto_cuota:,.0f}")
+                        else:
+                            st.info(f"**C{num_espacio}**\n⏳ ${monto_cuota:,.0f}")
+                    else:
+                        st.markdown(f"**C{num_espacio}**\n`Libre`")
 
         st.divider()
         st.subheader("📜 Historial Reciente de Cuotas Pagadas")
@@ -255,6 +329,8 @@ def render_pagos(usuario):
                 "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
             } for cp in cuotas_pagadas]
             st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay cuotas con abonos registrados todavía.")
     finally:
         db.close()
 
@@ -346,7 +422,6 @@ def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o administra el esquema de la base de datos.")
 
-    # 1. Validación estricta: solo el usuario administrador 'simon' puede acceder a estas funciones de mantenimiento estructural
     if usuario.strip().lower() != "simon":
         st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para el usuario **Administrador**.")
         return
@@ -388,24 +463,19 @@ def render_gestion_respaldos(usuario):
                 if confirmar_total:
                     try:
                         with st.spinner("Liberando conexiones del sistema y reestructurando el motor SQLite..."):
-                            # 2. Liberación forzosa de conexiones del pool para evitar bloqueos por archivos en modo solo lectura
                             engine.dispose()
 
-                            # 5. Eliminación y posterior recreación limpia de todas las tablas con SQLAlchemy
                             Base.metadata.drop_all(bind=engine)
                             Base.metadata.create_all(bind=engine)
 
-                            # Limpiar sesión actual por seguridad
                             st.session_state.clear()
                             st.session_state["logged_in"] = True
                             st.session_state["username"] = usuario
 
-                        # 6. Mensaje visual claro de éxito
                         st.success("🎉 ¡La base de datos se ha reestructurado y optimizado con éxito! Las tablas requeridas han sido recreadas y las conexiones liberadas.")
                         st.balloons()
                         st.rerun()
                     except Exception as e:
-                        # 6. Manejo seguro de errores
                         st.error(f"❌ Ocurrió un error crítico al procesar la base de datos: {e}")
                 else:
                     st.warning("⚠️ Debes marcar la casilla de confirmación para proceder.")
@@ -446,7 +516,6 @@ def main():
         st.markdown(f"👤 **Usuario activo:** `{usuario_actual.capitalize()}`")
         st.divider()
 
-        # Menú lateral completo con todas las opciones originales
         modulo = st.selectbox(
             "Seleccionar Módulo",
             [
