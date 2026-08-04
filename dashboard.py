@@ -27,14 +27,21 @@ def render_dashboard():
         resumen = caja_service.obtener_resumen_financiero()
         clientes = cliente_repo.listar_todos()
         prestamos_activos = prestamo_repo.listar_activos()
-        ultimos_eventos = prestamo_repo.listar_ultimos_eventos(limite=8)
+        
+        # Validación segura para eventos recientes
+        ultimos_eventos = []
+        if hasattr(prestamo_repo, "listar_ultimos_eventos"):
+            ultimos_eventos = prestamo_repo.listar_ultimos_eventos(limite=8)
+        else:
+            from app.models.evento import EventoFinanciero
+            ultimos_eventos = db.query(EventoFinanciero).order_by(EventoFinanciero.creado_en.desc()).limit(8).all()
 
         total_clientes = len(clientes)
         clientes_activos = len(
-            [c for c in clientes if c.estado.value == "ACTIVO"]
+            [c for c in clientes if hasattr(c, "estado") and (c.estado.value == "ACTIVO" if hasattr(c.estado, "value") else c.estado == "ACTIVO")]
         )
         clientes_bloqueados = len(
-            [c for c in clientes if c.estado.value == "BLOQUEADO"]
+            [c for c in clientes if hasattr(c, "estado") and (c.estado.value == "BLOQUEADO" if hasattr(c.estado, "value") else c.estado == "BLOQUEADO")]
         )
 
         st.divider()
@@ -48,19 +55,19 @@ def render_dashboard():
         with col1:
             st.metric(
                 "💵 Capital Disponible",
-                f"${resumen['caja_disponible']:,.2f}"
+                f"${resumen.get('caja_disponible', 0.0):,.2f}"
             )
 
         with col2:
             st.metric(
                 "📈 Capital Prestado",
-                f"${resumen['capital_prestado']:,.2f}"
+                f"${resumen.get('capital_prestado', 0.0):,.2f}"
             )
 
         with col3:
             st.metric(
                 "🏦 Capital Total",
-                f"${resumen['capital_total']:,.2f}"
+                f"${resumen.get('capital_total', 0.0):,.2f}"
             )
 
         st.divider()
@@ -108,26 +115,28 @@ def render_dashboard():
 
         else:
             for evento in ultimos_eventos:
-                fecha = evento.creado_en.strftime("%d/%m/%Y %H:%M")
+                fecha_creacion = getattr(evento, "creado_en", None)
+                fecha = fecha_creacion.strftime("%d/%m/%Y %H:%M") if fecha_creacion else "N/A"
 
-                monto = (
-                    f"${evento.monto:,.2f}"
-                    if evento.monto
-                    else "-"
-                )
+                monto_val = getattr(evento, "monto", 0.0)
+                monto = f"${monto_val:,.2f}" if monto_val else "-"
+
+                tipo_evento = getattr(evento, "tipo_evento", "MOVIMIENTO")
+                tipo_evento_str = tipo_evento.value if hasattr(tipo_evento, "value") else str(tipo_evento)
 
                 with st.container():
-                    col1, col2 = st.columns([4, 1])
+                    col_ev1, col_ev2 = st.columns([4, 1])
 
-                    with col1:
-                        st.markdown(f"**{evento.tipo_evento.value}**")
+                    with col_ev1:
+                        st.markdown(f"**{tipo_evento_str}**")
                         st.caption(fecha)
 
-                        if evento.observacion:
-                            st.write(evento.observacion)
-                            st.caption(f"Usuario: {evento.usuario}")
+                        observacion = getattr(evento, "observacion", "")
+                        if observacion:
+                            st.write(observacion)
+                            st.caption(f"Usuario: {getattr(evento, 'usuario', 'admin')}")
 
-                    with col2:
+                    with col_ev2:
                         st.markdown(f"### {monto}")
 
                     st.divider()
