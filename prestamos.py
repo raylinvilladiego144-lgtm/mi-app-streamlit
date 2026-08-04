@@ -1,5 +1,5 @@
 """
-app/pages/prestamos.py
+prestamos.py
 
 Vista y controlador para la gestión de préstamos, simulaciones y generación de paz y salvos.
 """
@@ -8,9 +8,10 @@ from decimal import Decimal
 import io
 import streamlit as st
 
-from app.database.database import SessionLocal
-from app.repositories.prestamo_repository import PrestamoRepository
-from app.repositories.cliente_repository import ClienteRepository
+# Importaciones planas corregidas para la estructura de tu proyecto
+from database import SessionLocal
+from prestamo_repository import PrestamoRepository
+from cliente_repository import ClienteRepository
 
 # ReportLab para generación de PDFs
 from reportlab.lib.pagesizes import letter
