@@ -39,7 +39,7 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
         'TituloPazSalvo',
         parent=styles['Heading1'],
         fontSize=20,
-        alignment=1, # Centrado
+        alignment=1,  # Centrado
         textColor=colors.HexColor('#1B365D')
     )
     
@@ -48,7 +48,7 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
         parent=styles['Normal'],
         fontSize=12,
         leading=18,
-        alignment=4 # Justificado
+        alignment=4  # Justificado
     )
 
     elementos.append(Paragraph("CERTIFICADO DE PAZ Y SALVO", titulo_estilo))
