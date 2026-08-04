@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 # --- IMPORTACIÓN DE MÓDULOS PLANOS EXISTENTES ---
-from database import SessionLocal, init_db
+from database import SessionLocal, init_db, engine, Base
 from caja_service import CajaService
 from prestamos import render_prestamos
 from cliente_repository import ClienteRepository
@@ -27,7 +27,7 @@ st.set_page_config(
 # --- INICIALIZAR LAS TABLAS DE SQLALCHEMY AUTOMÁTICAMENTE ---
 init_db()
 
-# --- CREDENCIALES DE ACCESO ---
+# --- CREDENCIALES DE ACCESO (ADMINISTRADOR DEFINIDO COMO 'simon') ---
 USUARIOS = {
     "simon": "12345",
     "raylin": "Barcelona12*",
@@ -340,10 +340,15 @@ def render_gestion_prestamos(usuario):
         db.close()
 
 
-# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD ---
+# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD (CON CONTROL DE ROL ADMIN Y engine.dispose) ---
 def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
-    st.caption("Respalda tu información o reinicia el sistema por completo si lo necesitas.")
+    st.caption("Respalda tu información o administra el esquema de la base de datos.")
+
+    # 1. Validación estricta de rol/permiso de administrador
+    if usuario.strip().lower() != "simon":
+        st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para el usuario **Administrador**.")
+        return
 
     col1, col2 = st.columns(2)
 
@@ -370,31 +375,39 @@ def render_gestion_respaldos(usuario):
         else:
             st.warning("⚠️ Todavía no se detecta ningún archivo de base de datos.")
 
-    # --- 2. ZONA DE PELIGRO: LIMPIEZA TOTAL DE LA BASE DE DATOS ---
+    # --- 2. ZONA DE PELIGRO: LIMPIEZA TOTAL Y RECREACIÓN DE TABLAS (CON engine.dispose) ---
     with col2:
         st.subheader("🔥 Zona de Peligro")
-        st.write("Reinicia y deja la base de datos completamente en ceros.")
+        st.write("Reinicia y reestructura la base de datos de forma limpia evitando bloqueos de archivo.")
 
-        with st.expander("⚠️ Desplegar opción de limpieza general", expanded=False):
-            confirmar_total = st.checkbox("Confirmo que deseo borrar ABSOLUTAMENTE TODO el contenido")
+        with st.expander("⚠️ Desplegar opción de mantenimiento estructural", expanded=False):
+            confirmar_total = st.checkbox("Confirmo que deseo restablecer la base de datos y eliminar los registros actuales")
             
-            if st.button("💥 Borrar Todo y Dejar en Ceros", type="primary", use_container_width=True):
+            if st.button("💥 Recrear Tablas y Liberar Conexiones", type="primary", use_container_width=True):
                 if confirmar_total:
                     try:
-                        borrados = 0
-                        for f in os.listdir("."):
-                            if f.endswith(".db"):
-                                os.remove(f)
-                                borrados += 1
-                    
-                        st.session_state.clear()
-                        
-                        st.success(f"¡Se eliminaron {borrados} archivo(s) de base de datos y se limpió la sesión con éxito! Recargando...")
+                        with st.spinner("Liberando conexiones del sistema y reestructurando el motor SQLite..."):
+                            # 2. Liberación forzosa de conexiones del pool para evitar bloqueos por archivos readonly
+                            engine.dispose()
+
+                            # 5. Eliminación y posterior recreación limpia de todas las tablas de SQLAlchemy
+                            Base.metadata.drop_all(bind=engine)
+                            Base.metadata.create_all(bind=engine)
+
+                            # Limpiar sesión actual por seguridad
+                            st.session_state.clear()
+                            st.session_state["logged_in"] = True
+                            st.session_state["username"] = usuario
+
+                        # 6. Mensaje visual claro de éxito
+                        st.success("🎉 ¡La base de datos se ha reestructurado y optimizado con éxito! Las tablas requeridas han sido recreadas y las conexiones liberadas.")
+                        st.balloons()
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Error al reiniciar: {e}")
+                        # 6. Manejo seguro de errores
+                        st.error(f"❌ Ocurrió un error crítico al procesar la base de datos: {e}")
                 else:
-                    st.warning("⚠️ Debes marcar la casilla de confirmación.")
+                    st.warning("⚠️ Debes marcar la casilla de confirmación para proceder.")
 
 
 # --- LOGIN ---
@@ -425,7 +438,7 @@ def main():
         login()
         return
 
-    usuario_actual = st.session_state.get("username", "admin")
+    usuario_actual = st.session_state.get("username", "simon")
 
     with st.sidebar:
         st.title("💳 Sistema Préstamos")
