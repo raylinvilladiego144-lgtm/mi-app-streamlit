@@ -5,6 +5,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+# Si no hay variable DATABASE_URL en los secretos, usa SQLite local de forma nativa
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///prestamos_v2.db")
 
 if DATABASE_URL.startswith("sqlite"):
@@ -23,4 +24,4 @@ def init_db():
         from base import Base
         Base.metadata.create_all(bind=engine)
     except Exception as e:
-        print(f"Aviso de conexión (no crítico si las tablas ya existen): {e}")
+        print(f"Nota de base de datos: {e}")
