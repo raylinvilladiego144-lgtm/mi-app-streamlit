@@ -1,6 +1,5 @@
 """
 caja_service.py
-
 Servicio encargado de calcular el estado financiero de la caja,
 capital disponible, saldo pendiente por cobrar en préstamos y
 registrar/consultar movimientos de aporte, retiro y eventos del sistema
@@ -9,6 +8,7 @@ filtrados por el usuario actual.
 
 from decimal import Decimal
 from typing import Dict, List
+import streamlit as st  # ⚡ Importado para refrescar el dashboard de inmediato
 
 from sqlalchemy.orm import Session
 
@@ -138,6 +138,9 @@ class CajaService:
         self.db.commit()
         self.db.refresh(evento)
 
+        # ⚡ Borrado inmediato de caché para reflejar cambios al instante
+        st.cache_data.clear()
+
         return evento
 
     def registrar_retiro(
@@ -165,5 +168,8 @@ class CajaService:
         self.db.add(evento)
         self.db.commit()
         self.db.refresh(evento)
+
+        # ⚡ Borrado inmediato de caché para reflejar cambios al instante
+        st.cache_data.clear()
 
         return evento
