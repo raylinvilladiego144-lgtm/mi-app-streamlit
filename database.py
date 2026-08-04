@@ -1,31 +1,29 @@
 """
 database.py
-Configuración de la sesión de base de datos SQLAlchemy para la nube.
+Configuración de la sesión de base de datos SQLAlchemy para Supabase.
 """
 
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-# Intenta buscar la URL en los secretos de Streamlit Cloud, o usa una local por defecto si estás en tu PC
+# Obtiene la URL de los secretos de Streamlit Cloud
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///prestamos_v2.db")
 
-# Ajuste automático del motor según si es SQLite o PostgreSQL (Cloud)
+# Configuración del motor de base de datos
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    # Si usas PostgreSQL en la nube (Supabase / Neon)
-    engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-    )
+    # Conexión limpia y directa compatible con Supabase
+    engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(
-    autocommit=False, autoflush=False, bind=engine
+    autocommit=False, 
+    autoflush=False, 
+    bind=engine
 )
 
 def init_db():
-    # Importa la Base desde donde la tengas definida
+    """Crea las tablas automáticamente en Supabase si no existen."""
     from base import Base
     Base.metadata.create_all(bind=engine)
