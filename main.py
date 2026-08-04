@@ -9,8 +9,9 @@ import os
 import pandas as pd
 import streamlit as st
 
-# --- IMPORTACIÓN DE MÓDULOS PLANOS EXISTENTES ---
-from database import SessionLocal, init_db, engine, Base
+# --- IMPORTACIÓN DE MÓDULOS PLANOS Y MOTOR DE BASE DE DATOS ---
+from database import SessionLocal, init_db, engine
+from base import Base
 from caja_service import CajaService
 from prestamos import render_prestamos
 from cliente_repository import ClienteRepository
@@ -27,7 +28,7 @@ st.set_page_config(
 # --- INICIALIZAR LAS TABLAS DE SQLALCHEMY AUTOMÁTICAMENTE ---
 init_db()
 
-# --- CREDENCIALES DE ACCESO (ADMINISTRADOR DEFINIDO COMO 'simon') ---
+# --- CREDENCIALES DE ACCESO ---
 USUARIOS = {
     "simon": "12345",
     "raylin": "Barcelona12*",
@@ -340,12 +341,12 @@ def render_gestion_prestamos(usuario):
         db.close()
 
 
-# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD (CON CONTROL DE ROL ADMIN Y engine.dispose) ---
+# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD (CON VALIDACIÓN DE ADMIN Y engine.dispose) ---
 def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o administra el esquema de la base de datos.")
 
-    # 1. Validación estricta de rol/permiso de administrador
+    # 1. Validación estricta: solo el usuario administrador 'simon' puede acceder a estas funciones de mantenimiento estructural
     if usuario.strip().lower() != "simon":
         st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para el usuario **Administrador**.")
         return
@@ -375,22 +376,22 @@ def render_gestion_respaldos(usuario):
         else:
             st.warning("⚠️ Todavía no se detecta ningún archivo de base de datos.")
 
-    # --- 2. ZONA DE PELIGRO: LIMPIEZA TOTAL Y RECREACIÓN DE TABLAS (CON engine.dispose) ---
+    # --- 2. ZONA DE PELIGRO: RECREACIÓN LIMPIA DE TABLAS (CON engine.dispose) ---
     with col2:
         st.subheader("🔥 Zona de Peligro")
         st.write("Reinicia y reestructura la base de datos de forma limpia evitando bloqueos de archivo.")
 
         with st.expander("⚠️ Desplegar opción de mantenimiento estructural", expanded=False):
-            confirmar_total = st.checkbox("Confirmo que deseo restablecer la base de datos y eliminar los registros actuales")
+            confirmar_total = st.checkbox("Confirmo que deseo restablecer la estructura de la base de datos y borrar los datos actuales")
             
             if st.button("💥 Recrear Tablas y Liberar Conexiones", type="primary", use_container_width=True):
                 if confirmar_total:
                     try:
                         with st.spinner("Liberando conexiones del sistema y reestructurando el motor SQLite..."):
-                            # 2. Liberación forzosa de conexiones del pool para evitar bloqueos por archivos readonly
+                            # 2. Liberación forzosa de conexiones del pool para evitar bloqueos por archivos en modo solo lectura
                             engine.dispose()
 
-                            # 5. Eliminación y posterior recreación limpia de todas las tablas de SQLAlchemy
+                            # 5. Eliminación y posterior recreación limpia de todas las tablas con SQLAlchemy
                             Base.metadata.drop_all(bind=engine)
                             Base.metadata.create_all(bind=engine)
 
