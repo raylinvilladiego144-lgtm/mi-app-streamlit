@@ -1,273 +1,211 @@
 """
-prestamos.py
-Módulo de gestión de préstamos, cartera activa, creación de nuevos desembolsos y generación de Paz y Salvo.
+app/pages/prestamos.py
+
+Vista y controlador para la gestión de préstamos, simulaciones y generación de paz y salvos.
 """
 
-from datetime import datetime, timedelta
 from decimal import Decimal
 import io
-import pandas as pd
 import streamlit as st
 
+from app.database.database import SessionLocal
+from app.repositories.prestamo_repository import PrestamoRepository
+from app.repositories.cliente_repository import ClienteRepository
+
+# ReportLab para generación de PDFs
 from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-from database import SessionLocal
-from prestamo_repository import PrestamoRepository
-from cliente_repository import ClienteRepository
-from prestamo import EstadoPrestamo, EstadoCuota
 
-
-def generar_pdf_paz_y_salvo(prestamo, cliente, cuotas):
-    """
-    Genera un archivo PDF en memoria con el certificado oficial de Paz y Salvo del préstamo.
-    """
+def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
-    elements = []
-    
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(
-        'TitleStyle',
-        parent=styles['Title'],
-        fontName='Helvetica-Bold',
-        fontSize=18,
-        leading=22,
-        textColor=colors.HexColor("#0F172A"),
-        alignment=1 # Centrado
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36
     )
     
-    elements.append(Paragraph("<b>CERTIFICADO DE PAZ Y SALVO</b>", title_style))
-    elements.append(Spacer(1, 15))
+    elementos = []
+    styles = getSampleStyleSheet()
     
-    fecha_emision = datetime.now().strftime("%d/%m/%Y %H:%M")
-    fecha_solicitud = getattr(prestamo, 'fecha_creacion', None)
-    if isinstance(fecha_solicitud, datetime):
-        fecha_solicitud_str = fecha_solicitud.strftime("%d/%m/%Y")
-    else:
-        fecha_solicitud_str = str(fecha_solicitud) if fecha_solicitud else "N/A"
+    titulo_estilo = ParagraphStyle(
+        'TituloPazSalvo',
+        parent=styles['Heading1'],
+        fontSize=20,
+        alignment=1, # Centrado
+        textColor=colors.HexColor('#1B365D')
+    )
+    
+    body_estilo = ParagraphStyle(
+        'BodyPazSalvo',
+        parent=styles['Normal'],
+        fontSize=12,
+        leading=18,
+        alignment=4 # Justificado
+    )
 
-    nombre_cliente = getattr(cliente, 'nombre_completo', 'N/A')
-
-    datos_cliente = f"""
-    <b>Nombre del Cliente:</b> {nombre_cliente}<br/>
-    <b>Fecha de Emisión del Reporte:</b> {fecha_emision}<br/>
-    <b>ID del Préstamo:</b> #{prestamo.id}<br/>
-    <b>Fecha de Solicitud del Crédito:</b> {fecha_solicitud_str}<br/>
-    <b>Monto Total del Préstamo:</b> ${prestamo.monto_total:,.2f}<br/>
-    <b>Saldo Pendiente Actual:</b> <font color="green"><b>Certificado Generado</b></font>
+    elementos.append(Paragraph("CERTIFICADO DE PAZ Y SALVO", titulo_estilo))
+    elementos.append(Spacer(1, 20))
+    
+    texto_certificacion = f"""
+    A quien pueda interesar:<br/><br/>
+    Por medio de la presente se certifica que el/la cliente <b>{cliente_nombre}</b> 
+    se encuentra a <b>PAZ Y SALVO</b> por todo concepto relacionado con el crédito o 
+    préstamo registrado bajo el identificador interno <b>N° {prestamo_id}</b>.<br/><br/>
+    El presente documento se expide a solicitud de la parte interesada a los 
+    días del mes en curso, habiéndose verificado la cancelación total de los 
+    valores adeudados, capital e intereses correspondientes.
     """
+    elementos.append(Paragraph(texto_certificacion, body_estilo))
+    elementos.append(Spacer(1, 40))
     
-    elements.append(Paragraph(datos_cliente, styles['Normal']))
-    elements.append(Spacer(1, 20))
-    
-    elements.append(Paragraph("<b>Historial Detallado de Pagos y Cuotas:</b>", styles['Heading2']))
-    elements.append(Spacer(1, 10))
-    
-    tabla_datos = [["Cuota N°", "Valor Cuota", "Monto Abonado", "Estado"]]
-    
-    if cuotas:
-        for c in cuotas:
-            estado_val = c.estado.value if hasattr(c.estado, 'value') else str(c.estado)
-            tabla_datos.append([
-                f"Cuota #{c.numero_cuota}",
-                f"${c.monto_cuota:,.2f}",
-                f"${c.monto_pagado:,.2f}",
-                estado_val
-            ])
-    else:
-        tabla_datos.append(["N/A", "$0.00", "$0.00", "ACTIVO"])
-        
-    t = Table(tabla_datos, colWidths=[100, 130, 130, 120])
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E293B')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+    # Tabla de firmas
+    firma_data = [
+        ["__________________________________", "__________________________________"],
+        ["Firma Autorizada / Gerencia", "Recibido Conforme (Cliente)"]
+    ]
+    tabla_firmas = Table(firma_data, colWidths=[240, 240])
+    tabla_firmas.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
     ]))
     
-    elements.append(t)
-    elements.append(Spacer(1, 30))
+    elementos.append(tabla_firmas)
+    doc.build(elementos)
     
-    nota_final = "<i>Este documento certifica oficialmente el estado de la obligación financiera correspondiente a este crédito.</i>"
-    elements.append(Paragraph(nota_final, styles['Normal']))
-    
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
 
 
 def render_prestamos():
-    st.title("💳 Gestión de Préstamos")
-    
-    tab_cartera, tab_nuevo = st.tabs(["📂 Cartera Activa", "➕ Nuevo Préstamo"])
+    st.markdown("## 💳 Gestión de Préstamos y Cartera")
+    st.caption("Control de créditos activos, simulaciones financieras y emisión de paz y salvos")
 
     db = SessionLocal()
+
     try:
         prestamo_repo = PrestamoRepository(db)
         cliente_repo = ClienteRepository(db)
-        usuario_actual = st.session_state.get("username", "admin")
 
-        # --- PESTAÑA 1: CARTERA ACTIVA ---
-        with tab_cartera:
-            st.subheader("📋 Préstamos en Curso y Finalizados")
-            prestamos = prestamo_repo.obtener_por_usuario(usuario_actual)
+        clientes = cliente_repo.listar_todos()
+        prestamos_activos = prestamo_repo.listar_activos()
 
-            if not prestamos:
-                st.info("No hay préstamos registrados.")
-            else:
-                data = []
-                prestamos_dict = {}
-                
-                for p in prestamos:
-                    nombre_cliente = getattr(p, "cliente_nombre", None)
-                    if not nombre_cliente and hasattr(p, "cliente") and p.cliente:
-                        nombre_cliente = getattr(p.cliente, "nombre_completo", "N/A")
-                    elif not nombre_cliente:
-                        nombre_cliente = "N/A"
+        tab_nuevo, tab_lista, tab_simulador = st.tabs([
+            "➕ Nuevo Préstamo", 
+            "📋 Préstamos Activos", 
+            "🧮 Simulador Financiero"
+        ])
 
-                    estado_actual = getattr(p, "estado", EstadoPrestamo.ACTIVO)
-                    estado_str = estado_actual.value if hasattr(estado_actual, "value") else str(estado_actual)
-
-                    data.append({
-                        "ID": p.id,
-                        "Cliente": nombre_cliente,
-                        "Capital": f"${p.capital:,.2f}" if hasattr(p, "capital") else "$0.00",
-                        "Interés (%)": f"{p.porcentaje_interes}%" if hasattr(p, "porcentaje_interes") else "0%",
-                        "Total a Pagar": f"${p.monto_total:,.2f}" if hasattr(p, "monto_total") else "$0.00",
-                        "Cuotas": getattr(p, "numero_cuotas", 1),
-                        "Estado": estado_str
-                    })
-                    prestamos_dict[p.id] = p
-
-                df_prestamos = pd.DataFrame(data)
-                st.dataframe(df_prestamos, use_container_width=True, hide_index=True)
-
-                st.divider()
-                st.subheader("📄 Descarga de Certificado (Paz y Salvo / Reporte)")
-                
-                # Selector disponible para cualquier préstamo registrado
-                prestamo_ids_disponibles = [p.id for p in prestamos]
-                if prestamo_ids_disponibles:
-                    id_seleccionado = st.selectbox("Seleccione el ID del Préstamo para generar el reporte", options=prestamo_ids_disponibles)
-                    prestamo_sel = prestamos_dict.get(id_seleccionado)
-                    
-                    if prestamo_sel:
-                        cuotas_prestamo = getattr(prestamo_sel, "cuotas", [])
-                        
-                        st.success(f"✅ Préstamo #{prestamo_sel.id} seleccionado correctamente.")
-                        
-                        pdf_file = generar_pdf_paz_y_salvo(prestamo_sel, prestamo_sel.cliente, cuotas_prestamo)
-                        st.download_button(
-                            label=f"📥 Descargar Reporte / Paz y Salvo - Préstamo #{prestamo_sel.id} (PDF)",
-                            data=pdf_file,
-                            file_name=f"Reporte_Prestamo_{prestamo_sel.id}.pdf",
-                            mime="application/pdf",
-                            type="primary"
-                        )
-
-        # --- PESTAÑA 2: NUEVO PRÉSTAMO / DESEMBOLSO ---
+        # ==========================================
+        # TAB 1: NUEVO PRÉSTAMO
+        # ==========================================
         with tab_nuevo:
-            st.subheader("Nuevo Desembolso")
-
-            clientes = cliente_repo.obtener_por_usuario(usuario_actual)
-
+            st.subheader("Otorgar Nuevo Crédito")
+            
             if not clientes:
-                st.warning("⚠️ No tienes clientes registrados. Por favor, ve al módulo de 'Clientes' y registra al menos uno antes de otorgar un préstamo.")
-                return
-
-            clientes_dict = {c.nombre_completo: c for c in clientes if hasattr(c, "nombre_completo")}
-
-            if not clientes_dict:
-                st.warning("⚠️ Los clientes registrados no tienen un nombre válido asignado.")
-                return
-
-            with st.form("form_nuevo_prestamo"):
-                col_c1, col_c2 = st.columns(2)
-
-                with col_c1:
-                    cliente_seleccionado_nombre = st.selectbox(
-                        "Seleccionar Cliente *",
-                        options=list(clientes_dict.keys())
-                    )
+                st.warning("⚠️ No hay clientes registrados en el sistema. Debe registrar uno antes de crear un préstamo.")
+            else:
+                # Diccionario seguro con formato id para evitar colisiones por nombres duplicados
+                clientes_dict = {f"{c.nombre_completo} (ID: {c.id})": c for c in clientes if hasattr(c, "nombre_completo")}
+                
+                with st.form("form_nuevo_prestamo", clear_on_submit=True):
+                    cliente_seleccionado_str = st.selectbox("Seleccionar Cliente *", options=list(clientes_dict.keys()))
                     
-                    capital = st.number_input(
-                        "Capital a prestar ($) *",
-                        min_value=0.0,
-                        value=1000.0,
-                        step=100.0
-                    )
-
-                    tasa_interes = st.number_input(
-                        "Tasa de interés (%) *",
-                        min_value=0.0,
-                        value=20.0,
-                        step=1.0
-                    )
-
-                    frecuencia = st.selectbox(
-                        "Frecuencia de pago *",
-                        ["Diario", "Semanal", "Quincenal", "Mensual"]
-                    )
-
-                with col_c2:
-                    num_cuotas = st.number_input(
-                        "Número de cuotas *",
-                        min_value=1,
-                        value=4,
-                        step=1
-                    )
-
-                    fecha_inicio = st.date_input(
-                        "Fecha de inicio / primer cobro *",
-                        value=datetime.now().date()
-                    )
-
-                    cap_sim = Decimal(str(capital))
-                    tasa_sim = Decimal(str(tasa_interes)) / Decimal("100")
-                    total_cobrar_sim = cap_sim + (cap_sim * tasa_sim)
-                    cuotas_sim = int(num_cuotas) if num_cuotas > 0 else 1
-                    valor_cuota_sim = total_cobrar_sim / Decimal(str(cuotas_sim))
-
-                    st.markdown(
-                        f"""
-                        💡 **Simulación:** Total a cobrar: **${total_cobrar_sim:,.2f}** | Valor cuota aprox: **${valor_cuota_sim:,.2f}**
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                observaciones = st.text_area(
-                    "Observaciones o notas adicionales",
-                    placeholder="Ej. Garantía entregada, condiciones especiales..."
-                )
-
-                submitted = st.form_submit_button("💰 Confirmar y Crear Préstamo", use_container_width=True, type="primary")
-
-                if submitted:
-                    cliente_obj = clientes_dict.get(cliente_seleccionado_nombre)
-                    if not cliente_obj:
-                        st.error("❌ Error: Selecciona un cliente válido.")
-                    else:
+                    col_p1, col_p2 = st.columns(2)
+                    with col_p1:
+                        capital = st.number_input("Capital a Prestar ($) *", min_value=10.0, step=100.0, format="%.2f")
+                    with col_p2:
+                        tasa_interes = st.number_input("Tasa de Interés (%) *", min_value=0.0, step=0.5, format="%.2f")
+                        
+                    plazo_dias = st.number_input("Plazo en Días *", min_value=1, step=1, value=30)
+                    observacion = st.text_area("Observaciones o Destino del Préstamo", placeholder="Ej. Capital de trabajo para mercancía")
+                    
+                    btn_crear = st.form_submit_button("Crear Préstamo", type="primary", use_container_width=True)
+                    
+                    if btn_crear:
+                        cliente_obj = clientes_dict[cliente_seleccionado_str]
                         try:
                             prestamo_repo.crear_prestamo(
-                                cliente_nombre=cliente_obj.nombre_completo,
-                                capital=capital,
-                                tasa_interes=tasa_interes,
-                                num_cuotas=num_cuotas,
-                                frecuencia=frecuencia,
-                                fecha_inicio=fecha_inicio,
-                                observaciones=observaciones,
-                                usuario=usuario_actual
+                                cliente_id=cliente_obj.id,
+                                capital=Decimal(str(capital)),
+                                tasa_interes=Decimal(str(tasa_interes)),
+                                plazo_dias=int(plazo_dias),
+                                observacion=observacion
                             )
-                            st.success(f"¡Préstamo a '{cliente_obj.nombre_completo}' creado con éxito!")
+                            st.success("🎉 ¡Préstamo creado con éxito!")
                             st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Error al procesar el préstamo: {e}")
+                        except Exception as ex:
+                            st.error(f"❌ Error al crear el préstamo: {ex}")
+
+        # ==========================================
+        # TAB 2: PRÉSTAMOS ACTIVOS
+        # ==========================================
+        with tab_lista:
+            st.subheader("Listado de Préstamos Vigentes")
+            
+            if not prestamos_activos:
+                st.info("ℹ️ No hay préstamos activos en este momento.")
+            else:
+                for p in prestamos_activos:
+                    with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} - Cliente ID: {getattr(p, 'cliente_id', 'N/A')}"):
+                        c_info1, c_info2 = st.columns(2)
+                        with c_info1:
+                            st.write(f"**Capital Inicial:** ${getattr(p, 'capital', 0.0):,.2f}")
+                            st.write(f"**Tasa de Interés:** {getattr(p, 'tasa_interes', 0.0)}%")
+                        with c_info2:
+                            st.write(f"**Plazo:** {getattr(p, 'plazo_dias', 0)} días")
+                            st.write(f"Estado: **{getattr(p, 'estado', 'ACTIVO')}**")
+                            
+                        # Botón para descargar Paz y Salvo si el crédito está pagado o se requiere
+                        if st.button(f"Generar Paz y Salvo (Préstamo #{p.id})", key=f"pdf_{p.id}"):
+                            # Buscar nombre de cliente asociado de forma segura
+                            nombre_cli = "Cliente General"
+                            for c in clientes:
+                                if c.id == p.cliente_id:
+                                    nombre_cli = c.nombre_completo
+                                    break
+                                    
+                            pdf_data = generar_pdf_paz_y_salvo(nombre_cli, p.id)
+                            st.download_button(
+                                label="📥 Descargar PDF de Paz y Salvo",
+                                data=pdf_data,
+                                file_name=f"paz_y_salvo_prestamo_{p.id}.pdf",
+                                mime="application/pdf",
+                                key=f"download_{p.id}"
+                            )
+
+        # ==========================================
+        # TAB 3: SIMULADOR FINANCIERO
+        # ==========================================
+        with tab_simulador:
+            st.subheader("Simulador de Créditos")
+            
+            s_col1, s_col2 = st.columns(2)
+            with s_col1:
+                cap_sim_input = st.number_input("Capital a simular ($)", min_value=10.0, value=1000.0, step=100.0)
+                tasa_sim_input = st.number_input("Tasa estimada (%)", min_value=0.0, value=10.0, step=0.5)
+            with s_col2:
+                plazo_sim_input = st.number_input("Plazo en días", min_value=1, value=30, step=1)
+                
+            cap_sim = Decimal(str(cap_sim_input))
+            tasa_sim = Decimal(str(tasa_sim_input)) / Decimal("100")
+            total_cobrar_sim = cap_sim + (cap_sim * tasa_sim)
+            cuota_diaria_sim = total_cobrar_sim / Decimal(str(plazo_sim_input)) if plazo_sim_input > 0 else 0
+
+            st.divider()
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Interés Proyectado", f"${(cap_sim * tasa_sim):,.2f}")
+            m2.metric("Total a Cobrar", f"${total_cobrar_sim:,.2f}")
+            m3.metric("Cuota Referencial Diaria", f"${cuota_diaria_sim:,.2f}")
 
     finally:
         db.close()
