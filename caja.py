@@ -1,15 +1,13 @@
 """
-caja.py
+app/pages/caja.py
 
 Vista y controlador para la gestión de la caja por usuario.
 """
 
 from decimal import Decimal
-
-import streamlit as str_st  # o usa st directamente
 import streamlit as st
 
-# Importaciones corregidas para estructura plana en la raíz
+# Importaciones ajustadas según tu estructura
 from database.database import SessionLocal
 from services.caja_service import CajaService
 
@@ -130,10 +128,10 @@ def render_caja(usuario_actual: str = "admin"):
 
                 tabla_movimientos.append(
                     {
-                        "ID": mov.id,
+                        "ID": getattr(mov, "id", "-"),
                         "Fecha / ID": fecha,
                         "Tipo de Evento": tipo,
-                        "Monto": f"${mov.monto:,.2f}",
+                        "Monto": f"${mov.monto:,.2f}" if getattr(mov, "monto", None) else "$0.00",
                         "Usuario": getattr(mov, "usuario", usuario_actual),
                         "Observación / Detalle": concepto,
                     }
