@@ -275,21 +275,54 @@ def render_pagos(usuario):
                     st.error(f"❌ Error al registrar el abono en la base de datos: {e}")
 
         st.divider()
-        st.subheader("📅 Calendario de Cuotas del Préstamo Seleccionado")
+        st.subheader("📅 Calendario de Cuotas (Diseño Matricial)")
         
-        # Selector para ver el calendario del préstamo activo que el usuario elija
         prestamo_calendario_key = st.selectbox(
-            "Seleccionar Préstamo para Ver Calendario de 30 Espacios", 
+            "Seleccionar Préstamo para Ver Calendario", 
             options=list(prestamo_opciones.keys()),
             key="select_calendario_prestamo"
         )
         prestamo_cal = prestamo_opciones[prestamo_calendario_key]
 
-        # Cargar las cuotas asociadas a este préstamo
-        cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == prestamo_cal.id).all()
+        cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == prestamo_cal.id).order_by(Cuota.numero_cuota.asc()).all()
         mapa_cuotas = {c.numero_cuota: c for c in cuotas_prestamo}
 
-        # Renderizar en filas de 6 columnas (5 filas x 6 columnas = 30 espacios exactos)
+        # Estilo visual tipo celda de Excel compacta y limpia
+        st.markdown("""
+            <style>
+            .cuota-box {
+                background-color: #ffeb3b;
+                border: 1px solid #cddc39;
+                padding: 8px;
+                text-align: center;
+                border-radius: 4px;
+                color: #000000;
+                font-weight: bold;
+                margin-bottom: 6px;
+            }
+            .cuota-box-pagada {
+                background-color: #d4edda;
+                border: 1px solid #c3e6cb;
+                padding: 8px;
+                text-align: center;
+                border-radius: 4px;
+                color: #155724;
+                font-weight: bold;
+                margin-bottom: 6px;
+            }
+            .cuota-box-libre {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                padding: 8px;
+                text-align: center;
+                border-radius: 4px;
+                color: #6c757d;
+                margin-bottom: 6px;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+        # Renderizar la cuadrícula exacta de 30 espacios distribuidos en filas de 6 columnas
         TOTAL_ESPACIOS = 30
         for fila in range(5):
             cols = st.columns(6)
@@ -305,13 +338,13 @@ def render_pagos(usuario):
                         monto_cuota = float(cuota_obj.monto_cuota)
                         
                         if estado_str == "PAGADA" or monto_pagado >= monto_cuota:
-                            st.success(f"**C{num_espacio}**\n✅ ${monto_pagado:,.0f}")
+                            st.markdown(f'<div class="cuota-box-pagada">C{num_espacio}<br>${monto_pagado:,.0f}</div>', unsafe_allow_html=True)
                         elif monto_pagado > 0:
-                            st.warning(f"**C{num_espacio}**\n⚠️ ${monto_pagado:,.0f} / ${monto_cuota:,.0f}")
+                            st.markdown(f'<div class="cuota-box" style="background-color: #fff3cd;">C{num_espacio}<br>Parcial: ${monto_pagado:,.0f}</div>', unsafe_allow_html=True)
                         else:
-                            st.info(f"**C{num_espacio}**\n⏳ ${monto_cuota:,.0f}")
+                            st.markdown(f'<div class="cuota-box">C{num_espacio}<br>${monto_cuota:,.0f}</div>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f"**C{num_espacio}**\n`Libre`")
+                        st.markdown(f'<div class="cuota-box-libre">C{num_espacio}<br>Libre</div>', unsafe_allow_html=True)
 
         st.divider()
         st.subheader("📜 Historial Reciente de Cuotas Pagadas")
@@ -321,13 +354,15 @@ def render_pagos(usuario):
         ).order_by(Cuota.id.desc()).limit(10).all()
 
         if cuotas_pagadas:
-            data = [{
-                "ID Préstamo": cp.prestamo_id,
-                "Cuota N°": cp.numero_cuota,
-                "Valor Cuota": f"${cp.monto_cuota:,.2f}",
-                "Monto Abonado": f"${cp.monto_pagado:,.2f}",
-                "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
-            } for cp in cuotas_pagadas]
+            data = []
+            for cp in cuotas_pagadas:
+                data.append({
+                    "ID Préstamo": cp.prestamo_id,
+                    "Cuota N°": cp.numero_cuota,
+                    "Valor Cuota": f"${cp.monto_cuota:,.2f}",
+                    "Monto Abonado": f"${cp.monto_pagado:,.2f}",
+                    "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
+                })
             st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
             st.info("No hay cuotas con abonos registrados todavía.")
