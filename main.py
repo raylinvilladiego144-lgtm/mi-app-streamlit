@@ -266,7 +266,7 @@ def render_pagos(usuario):
                         prestamo_id=prestamo_seleccionado.id, 
                         monto_abono=monto_abono, 
                         usuario=usuario
-                    )
+                    ]
                     st.success(f"¡Abono de ${monto_abono:,.2f} aplicado con éxito a la(s) cuota(s) #{', '.join(map(str, cuotas_afectadas))}!")
                     st.rerun()
                 except Exception as e:
@@ -461,7 +461,6 @@ def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o administra el esquema de la base de datos.")
 
-    # Permitir acceso completo tanto a "simon" como a "raylin"
     if usuario.strip().lower() not in ["simon", "raylin"]:
         st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para administradores autorizados.")
         return
