@@ -1,21 +1,24 @@
 """
 database.py
-Configuración de la sesión de base de datos SQLAlchemy para Supabase.
+Configuración de la sesión de base de datos SQLAlchemy para Supabase con SSL forzado.
 """
 
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-# Obtiene la URL de los secretos de Streamlit Cloud
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///prestamos_v2.db")
 
-# Configuración del motor de base de datos
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    # Conexión limpia y directa compatible con Supabase
-    engine = create_engine(DATABASE_URL)
+    # Forzamos el modo SSL requerido por Supabase directamente en los argumentos de conexión
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"sslmode": "require"},
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
 
 SessionLocal = sessionmaker(
     autocommit=False, 
