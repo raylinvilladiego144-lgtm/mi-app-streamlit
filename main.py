@@ -456,13 +456,14 @@ def render_gestion_prestamos(usuario):
         db.close()
 
 
-# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD (CON VALIDACIÓN DE ADMIN Y engine.dispose) ---
+# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD (AUTORIZADO PARA SIMÓN Y RAYLIN) ---
 def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o administra el esquema de la base de datos.")
 
-    if usuario.strip().lower() != "simon":
-        st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para el usuario **Administrador**.")
+    # Permitir acceso completo tanto a "simon" como a "raylin"
+    if usuario.strip().lower() not in ["simon", "raylin"]:
+        st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para administradores autorizados.")
         return
 
     col1, col2 = st.columns(2)
