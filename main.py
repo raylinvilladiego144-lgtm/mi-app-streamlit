@@ -77,12 +77,10 @@ class RepositorioFinanciero:
             saldo_pendiente_cuota = cuota.monto_cuota - cuota.monto_pagado
 
             if monto_restante >= saldo_pendiente_cuota:
-                # El abono cubre por completo lo que falta de esta cuota (o la supera)
                 monto_restante -= saldo_pendiente_cuota
                 cuota.monto_pagado = cuota.monto_cuota
                 cuota.estado = EstadoCuota.PAGADA
             else:
-                # El abono es menor al saldo pendiente (pago parcial inteligente)
                 cuota.monto_pagado += monto_restante
                 cuota.estado = EstadoCuota.PARCIAL
                 monto_restante = Decimal("0.00")
@@ -157,7 +155,6 @@ def render_dashboard(usuario):
 
         st.divider()
 
-        # --- SECCIÓN DE MOVIMIENTOS MANUALES (Ingreso Genérico por defecto) ---
         with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Reposición)", expanded=False):
             with st.form("form_ajuste_caja_dashboard"):
                 tipo_movimiento = st.selectbox(
@@ -220,13 +217,14 @@ def render_dashboard(usuario):
         else:
             data = []
             for m in movimientos:
-                data.append({
+                fila_mov = {
                     "ID": m.id,
                     "Fecha": getattr(m, "fecha", "N/A"),
                     "Tipo": m.tipo_evento.value if hasattr(m.tipo_evento, "value") else str(m.tipo_evento),
                     "Monto": f"${m.monto:,.2f}" if hasattr(m, "monto") else "$0.00",
                     "Observación": getattr(m, "observacion", "")
-                })
+                }
+                data.append(fila_mov)
             st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
     finally:
         db.close()
@@ -268,7 +266,7 @@ def render_pagos(usuario):
                         prestamo_id=prestamo_seleccionado.id, 
                         monto_abono=monto_abono, 
                         usuario=usuario
-                    ]
+                    )
                     st.success(f"¡Abono de ${monto_abono:,.2f} aplicado con éxito a la(s) cuota(s) #{', '.join(map(str, cuotas_afectadas))}!")
                     st.rerun()
                 except Exception as e:
@@ -287,7 +285,7 @@ def render_pagos(usuario):
         cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == prestamo_cal.id).order_by(Cuota.numero_cuota.asc()).all()
         mapa_cuotas = {c.numero_cuota: c for c in cuotas_prestamo}
 
-        # Estilo visual tipo celda de Excel compacta y limpia
+        # Estilo visual tipo celda de Excel compacta
         st.markdown("""
             <style>
             .cuota-box {
@@ -322,8 +320,7 @@ def render_pagos(usuario):
             </style>
         """, unsafe_allow_html=True)
 
-        # Renderizar la cuadrícula exacta de 30 espacios distribuidos en filas de 6 columnas
-        TOTAL_ESPACIOS = 30
+        # Renderizar la cuadrícula de 30 espacios en filas de 6 columnas
         for fila in range(5):
             cols = st.columns(6)
             for col_idx in range(6):
@@ -354,16 +351,17 @@ def render_pagos(usuario):
         ).order_by(Cuota.id.desc()).limit(10).all()
 
         if cuotas_pagadas:
-            data = []
+            data_historial = []
             for cp in cuotas_pagadas:
-                data.append({
+                fila_historial = {
                     "ID Préstamo": cp.prestamo_id,
                     "Cuota N°": cp.numero_cuota,
                     "Valor Cuota": f"${cp.monto_cuota:,.2f}",
                     "Monto Abonado": f"${cp.monto_pagado:,.2f}",
                     "Estado": cp.estado.value if hasattr(cp.estado, "value") else str(cp.estado)
-                })
-            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                }
+                data_historial.append(fila_historial)
+            st.dataframe(pd.DataFrame(data_historial), use_container_width=True, hide_index=True)
         else:
             st.info("No hay cuotas con abonos registrados todavía.")
     finally:
@@ -408,7 +406,13 @@ def render_clientes(usuario):
         clientes = repo.obtener_por_usuario(usuario)
 
         if clientes:
-            data = [{"ID": c.id, "Nombre": getattr(c, "nombre_completo", "N/A")} for c in clientes]
+            data = []
+            for c in clientes:
+                fila_cli = {
+                    "ID": c.id, 
+                    "Nombre": getattr(c, "nombre_completo", "N/A")
+                }
+                data.append(fila_cli)
             st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
             st.info("No hay clientes registrados todavía.")
@@ -463,7 +467,6 @@ def render_gestion_respaldos(usuario):
 
     col1, col2 = st.columns(2)
 
-    # --- 1. BOTÓN DE RESPALDO (BACKUP) GLOBAL ---
     with col1:
         st.subheader("💾 Copia de Seguridad")
         st.write("Descarga una copia actual de la base de datos general.")
@@ -486,7 +489,6 @@ def render_gestion_respaldos(usuario):
         else:
             st.warning("⚠️ Todavía no se detecta ningún archivo de base de datos.")
 
-    # --- 2. ZONA DE PELIGRO: RECREACIÓN LIMPIA DE TABLAS (CON engine.dispose) ---
     with col2:
         st.subheader("🔥 Zona de Peligro")
         st.write("Reinicia y reestructura la base de datos de forma limpia evitando bloqueos de archivo.")
