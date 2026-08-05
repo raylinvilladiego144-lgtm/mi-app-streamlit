@@ -6,6 +6,7 @@ Clase base declarativa para SQLAlchemy 2.0.
 
 from sqlalchemy.orm import DeclarativeBase
 
+Base = declarative_base()
 
 class Base(DeclarativeBase):
     """
