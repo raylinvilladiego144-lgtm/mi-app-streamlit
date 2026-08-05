@@ -14,7 +14,7 @@ import streamlit as st
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
-from app.models.prestamo import Cuota, EstadoCuota, EstadoPrestamo
+from prestamo import Cuota, EstadoCuota, EstadoPrestamo
 
 # ReportLab para generación de PDFs
 from reportlab.lib.pagesizes import letter
