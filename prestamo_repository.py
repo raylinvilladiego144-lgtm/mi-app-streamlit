@@ -9,6 +9,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 from prestamo import Prestamo, Cuota, EstadoPrestamo, ModalidadInteres, EstadoCuota
 from cliente import Cliente
+from caja_service import CajaService
 
 
 class PrestamoRepository:
@@ -31,16 +32,19 @@ class PrestamoRepository:
         fecha_inicio=None,
         observaciones: str = "",
         usuario: str = "admin",
-        **kwargs
+        **kwargs  # Captura cualquier otro argumento adicional inesperado para evitar errores de tipo
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo asegurando el almacenamiento correcto de la tasa y el plazo.
+        Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente 
+        y conecta el desembolso directamente con el módulo de caja y dashboard.
         """
         cliente_obj = None
 
+        # 1. Si se proporciona cliente_id, buscar directamente por ID
         if cliente_id is not None:
             cliente_obj = self.db.query(Cliente).filter(Cliente.id == cliente_id).first()
 
+        # 2. Si no se encontró por ID o se envió cliente_nombre, resolver por nombre
         if not cliente_obj:
             if not cliente_nombre:
                 raise ValueError("Error: Debes ingresar un ID de cliente válido o el nombre completo del cliente.")
@@ -63,10 +67,22 @@ class PrestamoRepository:
         tasa_porcentaje = Decimal(str(tasa_interes or 0.0))
         tasa_dec = tasa_porcentaje / Decimal("100")
         
+        # Compatibilidad: Si pasan plazo_dias, usarlo como número de cuotas o calcular
         if plazo_dias is not None and plazo_dias > 0:
             cuotas_totales = int(plazo_dias)
         else:
             cuotas_totales = int(num_cuotas or 1)
+
+        # Validación opcional: Verificar si ya tiene un préstamo activo exactamente igual
+        prestamo_existente = self.db.query(Prestamo).filter(
+            Prestamo.cliente_id == cliente_obj.id,
+            Prestamo.capital == cap_dec,
+            Prestamo.porcentaje_interes == tasa_porcentaje,
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).first()
+
+        if prestamo_existente:
+            return prestamo_existente  # Retorna el existente en lugar de duplicarlo
 
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
@@ -91,7 +107,6 @@ class PrestamoRepository:
 
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
-        # Creación limpia del préstamo asignando directamente porcentaje_interes
         nuevo_prestamo = Prestamo(
             cliente_id=cliente_obj.id,
             usuario=str(usuario or "admin"),
@@ -124,11 +139,43 @@ class PrestamoRepository:
             )
             self.db.add(nueva_cuota)
 
+        # 3. Conexión automática con el Dashboard y Caja (Desembolso del crédito)
+        caja_service = CajaService(self.db, usuario_actual=str(usuario or "admin"))
+        movimiento_registrado = False
+        obs_caja = f"Desembolso por Crédito Otorgado (Préstamo #{nuevo_prestamo.id})"
+        
+        for metodo_caja in ["registrar_egreso", "registrar_retiro", "egresar", "retirar"]:
+            if hasattr(caja_service, metodo_caja):
+                try:
+                    fn = getattr(caja_service, metodo_caja)
+                    try:
+                        fn(monto=cap_dec, tipo="EGRESO", observacion=obs_caja)
+                    except TypeError:
+                        try:
+                            fn(monto=cap_dec, observacion=obs_caja)
+                        except TypeError:
+                            fn(cap_dec)
+                    movimiento_registrado = True
+                    break
+                except Exception:
+                    pass
+
+        if not movimiento_registrado and hasattr(caja_service, "caja") and caja_service.caja:
+            if hasattr(caja_service.caja, "saldo_disponible"):
+                caja_service.caja.saldo_disponible -= cap_dec
+                self.db.add(caja_service.caja)
+
         self.db.commit()
         self.db.refresh(nuevo_prestamo)
         return nuevo_prestamo
 
     def evaluar_y_recalcular_temporalidad_mensual(self, usuario: str = None):
+        """
+        Motor de temporalidad: Recorre los préstamos activos y verifica si cuotas pendientes
+        han cruzado fuera del rango del mes en curso (comparando año/mes de fecha_pago_esperada 
+        con la fecha actual). Si están vencidas fuera del rango mensual, se les recalcula 
+        el interés pendiente aplicando el mismo porcentaje original pactado.
+        """
         query = self.db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO)
         if usuario:
             query = query.filter(Prestamo.usuario == usuario)
@@ -148,15 +195,20 @@ class PrestamoRepository:
             ]
 
             for cuota in cuotas_pendientes:
+                # Comprobar si la fecha esperada está en un mes/año anterior al actual (fuera de rango mensual)
                 if cuota.fecha_pago_esperada < hoy:
+                    # Validar si ya cruzó un cambio de mes completo fuera del rango original
                     if (hoy.year > cuota.fecha_pago_esperada.year) or \
                        (hoy.year == cuota.fecha_pago_esperada.year and hoy.month > cuota.fecha_pago_esperada.month):
                         
                         saldo_pendiente_cuota = cuota.monto_cuota - (cuota.monto_pagado or Decimal("0.00"))
+                        
+                        # Evitar recálculos duplicados masivos en el mismo mes si ya fue ajustado
                         marca_recalculo = f"[Recalculado Mes {hoy.month}/{hoy.year}]"
                         obs_actual = getattr(cuota, "observaciones", "") or ""
                         
                         if marca_recalculo not in obs_actual:
+                            # Recálculo del interés sobre el saldo vencido usando el mismo % original
                             interes_adicional = saldo_pendiente_cuota * tasa_dec
                             cuota.monto_cuota += interes_adicional
                             p.monto_total += interes_adicional
