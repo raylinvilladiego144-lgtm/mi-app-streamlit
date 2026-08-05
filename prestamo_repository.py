@@ -21,7 +21,8 @@ class PrestamoRepository:
 
     def crear_prestamo(
         self,
-        cliente_nombre,
+        cliente_id: int | None = None,
+        cliente_nombre: str | None = None,
         capital: float | Decimal = 0.0,
         tasa_interes: float | Decimal = 0.0,
         num_cuotas: int = 1,
@@ -32,27 +33,36 @@ class PrestamoRepository:
     ) -> Prestamo:
         """
         Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente.
+        Soporta tanto 'cliente_id' directo como 'cliente_nombre' para mantener compatibilidad total.
         """
-        if not cliente_nombre:
-            raise ValueError("Error: Debes ingresar o seleccionar el nombre completo del cliente.")
+        cliente_obj = None
 
-        nombre_limpio = str(cliente_nombre).strip()
+        # 1. Si se proporciona cliente_id, buscar directamente por ID
+        if cliente_id is not None:
+            cliente_obj = self.db.query(Cliente).filter(Cliente.id == cliente_id).first()
+
+        # 2. Si no se encontró por ID o se envió cliente_nombre, resolver por nombre
+        if not cliente_obj:
+            if not cliente_nombre:
+                raise ValueError("Error: Debes ingresar un ID de cliente válido o el nombre completo del cliente.")
+            
+            nombre_limpio = str(cliente_nombre).strip()
+            cliente_obj = self.db.query(Cliente).filter(Cliente.nombre_completo == nombre_limpio).first()
+            
+            if not cliente_obj:
+                cliente_obj = Cliente(
+                    nombre_completo=nombre_limpio,
+                    documento="S/D",
+                    telefono="S/D",
+                    direccion="S/D",
+                    usuario=str(usuario or "admin")
+                )
+                self.db.add(cliente_obj)
+                self.db.flush()
+
         cap_dec = Decimal(str(capital or 0.0))
         tasa_dec = Decimal(str(tasa_interes or 0.0)) / Decimal("100")
         cuotas_totales = int(num_cuotas or 1)
-
-        # Buscar o crear el cliente único por nombre
-        cliente_obj = self.db.query(Cliente).filter(Cliente.nombre_completo == nombre_limpio).first()
-        if not cliente_obj:
-            cliente_obj = Cliente(
-                nombre_completo=nombre_limpio,
-                documento="S/D",
-                telefono="S/D",
-                direccion="S/D",
-                usuario=str(usuario or "admin")
-            )
-            self.db.add(cliente_obj)
-            self.db.flush()
 
         # Validación opcional: Verificar si ya tiene un préstamo activo exactamente igual
         prestamo_existente = self.db.query(Prestamo).filter(
