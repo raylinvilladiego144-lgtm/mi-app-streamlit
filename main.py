@@ -189,55 +189,6 @@ def render_dashboard(usuario):
         st.divider()
 
         # ==========================
-        # ACCIÓN RÁPIDA: REGISTRO DE MOVIMIENTOS Y REPOSICIÓN
-        # ==========================
-        with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Reposición)", expanded=False):
-            with st.form("form_ajuste_caja_dashboard", clear_on_submit=True):
-                tipo_movimiento = st.selectbox(
-                    "Tipo de Operación *",
-                    ["Ingreso Genérico", "Reposición de Capital"]
-                )
-                monto_movimiento = st.number_input("Monto ($) *", min_value=0.0, value=500.0, step=50.0)
-                observacion_movimiento = st.text_input("Observación / Motivo *", placeholder="Ej: Ingreso de efectivo adicional o inyección de capital")
-                
-                btn_guardar_mov = st.form_submit_button("📥 Registrar Movimiento en Caja", type="primary", use_container_width=True)
-
-                if btn_guardar_mov:
-                    if monto_movimiento <= 0:
-                        st.warning("El monto debe ser mayor a cero.")
-                    elif not observacion_movimiento.strip():
-                        st.warning("La observación es obligatoria para este registro.")
-                    else:
-                        monto_dec = Decimal(str(monto_movimiento))
-                        etiqueta_tipo = "REPOSICIÓN DE CAPITAL" if tipo_movimiento == "Reposición de Capital" else "INGRESO GENÉRICO"
-                        obs_final = f"[{etiqueta_tipo}] {observacion_movimiento.strip()}"
-                        
-                        try:
-                            caja_service.registrar_aporte(monto_dec, obs_final)
-                            st.success(f"¡{tipo_movimiento} de ${monto_movimiento:,.2f} aplicada con éxito a la caja!")
-                            st.rerun()
-                        except Exception as e:
-                            # Fallback alternativo si el servicio usa otros nombres de método
-                            operacion_realizada = False
-                            for metodo_caja in ["registrar_ingreso", "registrar_movimiento", "ingresar"]:
-                                if hasattr(caja_service, metodo_caja):
-                                    try:
-                                        fn = getattr(caja_service, metodo_caja)
-                                        fn(monto=monto_dec, observacion=obs_final)
-                                        operacion_realizada = True
-                                        break
-                                    except Exception:
-                                        pass
-                            if operacion_realizada:
-                                db.commit()
-                                st.success(f"¡{tipo_movimiento} de ${monto_movimiento:,.2f} aplicada con éxito a la caja!")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ No se pudo registrar el movimiento en el servicio de caja: {e}")
-
-        st.divider()
-
-        # ==========================
         # ÚLTIMOS MOVIMIENTOS
         # ==========================
         st.subheader("📜 Últimos Movimientos y Transacciones")
