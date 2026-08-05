@@ -4,7 +4,6 @@ app/models/prestamo.py
 Modelos SQLAlchemy para la gestión de préstamos, cuotas,
 estados y modalidades de interés.
 """
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Enum as SQLEnum
 from datetime import date
 from decimal import Decimal
 from enum import Enum as PyEnum
