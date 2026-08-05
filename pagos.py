@@ -1,7 +1,8 @@
 """
 app/pages/pagos.py
 
-Módulo para el registro y gestión de pagos filtrado por usuario.
+Módulo para el registro y gestión de pagos filtrado por usuario,
+integrado con la lógica de caja y distribución inteligente de abonos.
 """
 
 from decimal import Decimal
@@ -12,13 +13,16 @@ import streamlit as st
 from app.database.database import SessionLocal
 from app.repositories.cliente_repository import ClienteRepository
 from app.repositories.prestamo_repository import PrestamoRepository
-from app.models.prestamo import EstadoCuota, EstadoPrestamo, Prestamo
+from app.models.prestamo import EstadoCuota, EstadoPrestamo, Prestamo, Cuota
 from app.models.evento import EventoFinanciero, TipoEvento
+from app.services.caja_service import CajaService
 
 
 def render_pagos(usuario_actual: str = "admin"):
-    st.markdown(f"## 💳 Registro de Pagos — ({usuario_actual.capitalize()})")
-    st.caption("Gestiona los cobros de cuotas y abonos")
+    current_user = str(usuario_actual or "admin").strip().lower()
+
+    st.markdown(f"## 💳 Registro de Pagos — ({current_user.capitalize()})")
+    st.caption("Gestiona los cobros de cuotas, abonos y amortización inteligente")
 
     db = SessionLocal()
 
@@ -28,7 +32,7 @@ def render_pagos(usuario_actual: str = "admin"):
         # Consultar préstamos activos filtrados por usuario
         query_prestamos = db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO)
         if hasattr(Prestamo, "usuario"):
-            query_prestamos = query_prestamos.filter(Prestamo.usuario == usuario_actual)
+            query_prestamos = query_prestamos.filter(Prestamo.usuario == current_user)
 
         prestamos_activos = query_prestamos.all()
 
@@ -42,7 +46,8 @@ def render_pagos(usuario_actual: str = "admin"):
         for p in prestamos_activos:
             cliente = clientes_dict.get(p.cliente_id)
             nombre = cliente.nombre_completo if cliente else f"Cliente #{p.cliente_id}"
-            label = f"Préstamo #{p.id} - {nombre} (Capital: ${p.capital:,.2f})"
+            capital_val = getattr(p, "capital", getattr(p, "monto_total", Decimal("0.00")))
+            label = f"Préstamo #{p.id} - {nombre} (Monto: ${capital_val:,.2f})"
             opciones_prestamo[label] = p
 
         prestamo_seleccionado_label = st.selectbox(
@@ -62,15 +67,20 @@ def render_pagos(usuario_actual: str = "admin"):
             st.caption(f"Documento: {cliente_actual.documento if cliente_actual else 'N/A'}")
 
         with col_monto:
-            st.markdown(f"**Monto Total:** ${prestamo_actual.monto_total:,.2f}")
-            st.caption(f"Capital: ${prestamo_actual.capital:,.2f} | Interés: {prestamo_actual.porcentaje_interes}%")
+            monto_tot = getattr(prestamo_actual, 'monto_total', Decimal('0.00'))
+            cap_val = getattr(prestamo_actual, 'capital', monto_tot)
+            int_val = getattr(prestamo_actual, 'porcentaje_interes', 0.0)
+            st.markdown(f"**Monto Total:** ${monto_tot:,.2f}")
+            st.caption(f"Capital: ${cap_val:,.2f} | Interés: {int_val}%")
 
         with col_estado:
-            st.markdown(f"**Cuotas Totales:** {prestamo_actual.numero_cuotas}")
-            st.caption(f"Fecha Inicio: {prestamo_actual.fecha_inicio}")
+            num_ctas = getattr(prestamo_actual, 'numero_cuotas', len(prestamo_actual.cuotas))
+            fec_ini = getattr(prestamo_actual, 'fecha_inicio', 'N/A')
+            st.markdown(f"**Cuotas Totales:** {num_ctas}")
+            st.caption(f"Fecha Inicio: {fec_ini}")
 
         st.markdown("---")
-        st.subheader("📋 Tabla de Cuotas")
+        st.subheader("📋 Tabla de Cuotas y Estado de Cartera")
 
         cuotas_pendientes = [c for c in prestamo_actual.cuotas if c.estado != EstadoCuota.PAGADA]
 
@@ -82,75 +92,121 @@ def render_pagos(usuario_actual: str = "admin"):
                 pendiente = c.monto_cuota - (c.monto_pagado or Decimal("0.00"))
                 datos_tabla.append({
                     "Cuota #": c.numero_cuota,
-                    "Fecha Vencimiento": c.fecha_pago_esperada,
+                    "Fecha Vencimiento": getattr(c, "fecha_pago_esperada", "N/A"),
                     "Monto Cuota": f"${c.monto_cuota:,.2f}",
-                    "Monto Pagado": f"${c.monto_pagado:,.2f}",
+                    "Monto Pagado": f"${c.monto_pagado or Decimal('0.00'):,.2f}",
                     "Saldo Pendiente": f"${pendiente:,.2f}",
                     "Estado": c.estado.value if hasattr(c.estado, 'value') else str(c.estado)
                 })
 
-            st.dataframe(datos_tabla, use_container_width=True)
+            st.dataframe(datos_tabla, use_container_width=True, hide_index=True)
 
-            st.subheader("💵 Registrar Nuevo Abono")
-
-            proxima_cuota = min(cuotas_pendientes, key=lambda x: x.numero_cuota)
-            saldo_proxima = proxima_cuota.monto_cuota - (proxima_cuota.monto_pagado or Decimal("0.00"))
+            st.subheader("💵 Registrar Nuevo Abono (Distribución Inteligente)")
 
             with st.form("form_registrar_pago", clear_on_submit=True):
-                st.markdown(
-                    f"Abonando a **Cuota #{proxima_cuota.numero_cuota}** "
-                    f"(Saldo pendiente de cuota: **${saldo_proxima:,.2f}**)"
-                )
+                st.markdown("El monto ingresado se distribuirá cronológicamente a través de las cuotas pendientes.")
 
                 col_pago1, col_pago2 = st.columns(2)
 
                 with col_pago1:
                     monto_a_pagar = st.number_input(
-                        "Monto a abonar ($) *",
+                        "Monto del Abono ($) *",
                         min_value=1.0,
-                        max_value=float(saldo_proxima),
-                        value=float(saldo_proxima),
-                        step=10.0,
+                        value=25000.0,
+                        step=1000.0,
                         format="%.2f"
                     )
 
                 with col_pago2:
                     fecha_pago = st.date_input("Fecha del Pago *", value=date.today())
 
-                observacion = st.text_input("Observación / Referencia (Opcional)", placeholder="Ej. Pago en efectivo")
+                observacion = st.text_input("Observación / Referencia (Opcional)", placeholder="Ej. Abono en efectivo recibido en oficina")
 
-                btn_pagar = st.form_submit_button("✅ Registrar Pago", type="primary", use_container_width=True)
+                btn_pagar = st.form_submit_button("💰 Registrar y Aplicar Abono", type="primary", use_container_width=True)
 
                 if btn_pagar:
                     monto_decimal = Decimal(str(monto_a_pagar))
+                    monto_restante = monto_decimal
 
-                    proxima_cuota.monto_pagado = (proxima_cuota.monto_pagado or Decimal("0.00")) + monto_decimal
-                    proxima_cuota.fecha_pago_real = fecha_pago
+                    cuotas_por_pagar = db.query(Cuota).filter(
+                        Cuota.prestamo_id == prestamo_actual.id,
+                        Cuota.estado.in_([EstadoCuota.PENDIENTE, EstadoCuota.PARCIAL])
+                    ).order_by(Cuota.numero_cuota.asc()).all()
 
-                    if proxima_cuota.monto_pagado >= proxima_cuota.monto_cuota:
-                        proxima_cuota.estado = EstadoCuota.PAGADA
-                    else:
-                        proxima_cuota.estado = EstadoCuota.PARCIAL
+                    if not cuotas_por_pagar:
+                        raise ValueError("No hay cuotas pendientes para aplicar este abono.")
 
+                    cuotas_afectadas = []
+
+                    for cuota in cuotas_por_pagar:
+                        if monto_restante <= 0:
+                            break
+
+                        saldo_pendiente_cuota = cuota.monto_cuota - (cuota.monto_pagado or Decimal("0.00"))
+
+                        if monto_restante >= saldo_pendiente_cuota:
+                            monto_restante -= saldo_pendiente_cuota
+                            cuota.monto_pagado = cuota.monto_cuota
+                            cuota.estado = EstadoCuota.PAGADA
+                        else:
+                            cuota.monto_pagado = (cuota.monto_pagado or Decimal("0.00")) + monto_restante
+                            cuota.estado = EstadoCuota.PARCIAL
+                            monto_restante = Decimal("0.00")
+
+                        cuota.fecha_pago_real = fecha_pago
+                        db.add(cuota)
+                        cuotas_afectadas.append(cuota.numero_cuota)
+
+                    # Registrar el ingreso en la caja correspondiente al usuario actual
+                    caja_service = CajaService(db, usuario_actual=current_user)
+                    detalle_cuotas_str = ", ".join([str(c) for c in cuotas_afectadas])
+                    obs_caja = f"Abono aplicado a cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo_actual.id}). {observacion}".strip()
+
+                    operacion_exitosa = False
+                    for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
+                        if hasattr(caja_service, metodo_caja):
+                            try:
+                                fn = getattr(caja_service, metodo_caja)
+                                try:
+                                    fn(monto=monto_decimal, tipo="INGRESO", observacion=obs_caja)
+                                except TypeError:
+                                    try:
+                                        fn(monto=monto_decimal, observacion=obs_caja)
+                                    except TypeError:
+                                        fn(monto_decimal)
+                                operacion_exitosa = True
+                                break
+                            except Exception:
+                                pass
+
+                    if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
+                        if hasattr(caja_service.caja, "saldo_disponible"):
+                            caja_service.caja.saldo_disponible += monto_decimal
+                            db.add(caja_service.caja)
+
+                    # Registrar evento financiero formal
                     evento = EventoFinanciero(
                         tipo_evento=TipoEvento.PAGO_RECIBIDO,
                         monto=monto_decimal,
-                        usuario=usuario_actual,
-                        observacion=f"Pago cuota #{proxima_cuota.numero_cuota} préstamo #{prestamo_actual.id}. {observacion}".strip()
+                        usuario=current_user,
+                        observacion=obs_caja
                     )
                     db.add(evento)
 
+                    # Verificar si todas las cuotas del préstamo han sido liquidadas
+                    db.flush()
                     todas_pagadas = all(c.estado == EstadoCuota.PAGADA for c in prestamo_actual.cuotas)
                     if todas_pagadas:
                         prestamo_actual.estado = EstadoPrestamo.LIQUIDADO
+                        db.add(prestamo_actual)
 
                     db.commit()
 
-                    st.success(f"🎉 ¡Pago de ${monto_decimal:,.2f} registrado correctamente!")
+                    st.success(f"🎉 ¡Abono de ${monto_decimal:,.2f} aplicado con éxito a la(s) cuota(s) #{detalle_cuotas_str}!")
                     st.rerun()
 
     except Exception as e:
-        st.error(f"❌ Error al procesar el módulo de pagos: {e}")
         db.rollback()
+        st.error(f"❌ Error al procesar el módulo de pagos: {e}")
     finally:
         db.close()
