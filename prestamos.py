@@ -140,7 +140,7 @@ def render_prestamos():
                                 capital=Decimal(str(capital)),
                                 tasa_interes=Decimal(str(tasa_interes)),
                                 plazo_dias=int(plazo_dias),
-                                observacion=observacion
+                                observaciones=observacion
                             )
                             st.success("🎉 ¡Préstamo creado con éxito!")
                             st.rerun()
@@ -161,28 +161,31 @@ def render_prestamos():
                         c_info1, c_info2 = st.columns(2)
                         with c_info1:
                             st.write(f"**Capital Inicial:** ${getattr(p, 'capital', 0.0):,.2f}")
-                            st.write(f"**Tasa de Interés:** {getattr(p, 'tasa_interes', 0.0)}%")
+                            tasa_val = getattr(p, 'porcentaje_interes', None) if getattr(p, 'porcentaje_interes', None) is not None else getattr(p, 'tasa_interes', 0.0)
+                            st.write(f"**Tasa de Interés:** {tasa_val}%")
                         with c_info2:
-                            st.write(f"**Plazo:** {getattr(p, 'plazo_dias', 0)} días")
-                            st.write(f"Estado: **{getattr(p, 'estado', 'ACTIVO')}**")
+                            plazo_val = getattr(p, 'numero_cuotas', None) if getattr(p, 'numero_cuotas', None) is not None else getattr(p, 'plazo_dias', 0)
+                            st.write(f"**Plazo:** {plazo_val} días")
+                            estado_val = getattr(p, 'estado', 'ACTIVO')
+                            estado_str = estado_val.value if hasattr(estado_val, 'value') else str(estado_val)
+                            st.write(f"Estado: **{estado_str}**")
                             
-                        # Botón para descargar Paz y Salvo si el crédito está pagado o se requiere
-                        if st.button(f"Generar Paz y Salvo (Préstamo #{p.id})", key=f"pdf_{p.id}"):
-                            # Buscar nombre de cliente asociado de forma segura
-                            nombre_cli = "Cliente General"
-                            for c in clientes:
-                                if c.id == p.cliente_id:
-                                    nombre_cli = c.nombre_completo
-                                    break
-                                    
-                            pdf_data = generar_pdf_paz_y_salvo(nombre_cli, p.id)
-                            st.download_button(
-                                label="📥 Descargar PDF de Paz y Salvo",
-                                data=pdf_data,
-                                file_name=f"paz_y_salvo_prestamo_{p.id}.pdf",
-                                mime="application/pdf",
-                                key=f"download_{p.id}"
-                            )
+                        # Botón persistente para descargar Paz y Salvo sin desaparecer
+                        nombre_cli = "Cliente General"
+                        for c in clientes:
+                            if c.id == p.cliente_id:
+                                nombre_cli = c.nombre_completo
+                                break
+                                
+                        pdf_data = generar_pdf_paz_y_salvo(nombre_cli, p.id)
+                        st.download_button(
+                            label=f"📥 Descargar PDF de Paz y Salvo (Préstamo #{p.id})",
+                            data=pdf_data,
+                            file_name=f"paz_y_salvo_prestamo_{p.id}.pdf",
+                            mime="application/pdf",
+                            key=f"download_{p.id}",
+                            use_container_width=True
+                        )
 
         # ==========================================
         # TAB 3: SIMULADOR FINANCIERO
