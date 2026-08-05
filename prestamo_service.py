@@ -8,8 +8,9 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 import streamlit as st  # ⚡ Importado para refrescar la interfaz de forma instantánea
 from prestamo_repository import PrestamoRepository
-from prestamo import EstadoCuota, EstadoPrestamo
+from prestamo import EstadoCuota, EstadoPrestamo, Prestamo
 from evento import EventoFinanciero, TipoEvento
+from caja_service import CajaService
 
 
 class PrestamoService:
@@ -46,12 +47,23 @@ class PrestamoService:
         num_cuotas_int = int(numero_cuotas or 1)
         delta_dias = int(frecuencia_dias or 7)
 
+        # Mapeo de frecuencia numérica a descriptor de texto para el repositorio
+        frecuencia_str = "FIJO"
+        if delta_dias == 1:
+            frecuencia_str = "DIARIO"
+        elif delta_dias == 7:
+            frecuencia_str = "SEMANAL"
+        elif delta_dias == 15:
+            frecuencia_str = "QUINCENAL"
+        elif delta_dias >= 28:
+            frecuencia_str = "MENSUAL"
+
         nuevo_prestamo = self.repo.crear_prestamo(
             cliente_id=c_id,
             capital=cap_dec,
             tasa_interes=porcentaje_interes,
             num_cuotas=num_cuotas_int,
-            frecuencia="FIJO",
+            frecuencia=frecuencia_str,
             fecha_inicio=fecha_inicio,
             observaciones=observaciones,
             usuario=usuario
@@ -68,14 +80,22 @@ class PrestamoService:
     ) -> EventoFinanciero:
         """
         Registra un pago de forma inteligente: distribuye el dinero ingresado 
-        cubriendo la cuota actual y abonando automáticamente a las siguientes si sobra.
+        cubriendo la cuota actual y abonando automáticamente a las siguientes si sobra,
+        actualizando también de forma correcta la caja y el estado global del préstamo.
         """
-        prestamo = self.repo.obtener_por_id(prestamo_id) if hasattr(self.repo, "obtener_por_id") else self.db.query(self.repo.model).filter_by(id=prestamo_id).first()
+        current_user = str(usuario_actual or "admin").strip().lower()
+        
+        prestamo = self.db.query(Prestamo).filter(
+            Prestamo.id == prestamo_id,
+            Prestamo.usuario == current_user
+        ).first()
         
         if not prestamo:
-            raise ValueError("El préstamo seleccionado no existe.")
+            raise ValueError("El préstamo seleccionado no existe o no pertenece al usuario activo.")
 
         monto_restante = Decimal(str(monto_pagado or 0.0))
+        if monto_restante <= Decimal("0.00"):
+            raise ValueError("El monto del pago debe ser mayor a cero.")
         
         # Obtener cuotas pendientes ordenadas secuencialmente
         cuotas_pendientes = [
@@ -84,7 +104,11 @@ class PrestamoService:
         ]
         cuotas_pendientes.sort(key=lambda x: x.numero_cuota if hasattr(x, 'numero_cuota') else x.id)
 
+        if not cuotas_pendientes:
+            raise ValueError("Este préstamo ya se encuentra totalmente cancelado o no tiene cuotas pendientes.")
+
         total_abonado_efectivo = Decimal("0.00")
+        cuotas_afectadas = []
 
         for cuota in cuotas_pendientes:
             if monto_restante <= Decimal("0.00"):
@@ -102,20 +126,59 @@ class PrestamoService:
             else:
                 # El dinero cubre una parte (abono parcial a la cuota)
                 cuota.monto_pagado = monto_ya_pagado + monto_restante
-                cuota.estado = EstadoCuota.PARCIAL if hasattr(EstadoCuota, 'PARCIAL') else EstadoCuota.ACTIVA
+                cuota.estado = EstadoCuota.PARCIAL if hasattr(EstadoCuota, 'PARCIAL') else EstadoCuota.PENDIENTE
                 total_abonado_efectivo += monto_restante
                 monto_restante = Decimal("0.00")
+
+            cuota.fecha_pago_real = datetime.now().date()
+            self.db.add(cuota)
+            cuotas_afectadas.append(str(cuota.numero_cuota))
 
         # Si sobra dinero tras liquidar todas las cuotas pendientes
         if monto_restante > Decimal("0.00"):
             total_abonado_efectivo += monto_restante
 
-        # Registrar el evento financiero en la caja del usuario
+        # --- SINCRONIZACIÓN AUTOMÁTICA CON LA CAJA DEL USUARIO ---
+        caja_service = CajaService(self.db, usuario_actual=current_user)
+        detalle_cuotas_str = ", ".join(cuotas_afectadas)
+        obs_caja = f"Pago distribuido en cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo.id}). {observacion}".strip()
+
+        operacion_exitosa = False
+        for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
+            if hasattr(caja_service, metodo_caja):
+                try:
+                    fn = getattr(caja_service, metodo_caja)
+                    try:
+                        fn(monto=total_abonado_efectivo, tipo="INGRESO", observacion=obs_caja)
+                    except TypeError:
+                        try:
+                            fn(monto=total_abonado_efectivo, observacion=obs_caja)
+                        except TypeError:
+                            fn(total_abonado_efectivo)
+                    operacion_exitosa = True
+                    break
+                except Exception:
+                    pass
+
+        if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
+            if hasattr(caja_service.caja, "saldo_disponible"):
+                caja_service.caja.saldo_disponible += total_abonado_efectivo
+                self.db.add(caja_service.caja)
+
+        # Verificar si todas las cuotas han quedado pagadas para liquidar el préstamo
+        self.db.flush()
+        todas_pagadas = all(c.estado == EstadoCuota.PAGADA for c in prestamo.cuotas)
+        if todas_pagadas:
+            prestamo.estado = EstadoPrestamo.LIQUIDADO
+            self.db.add(prestamo)
+
+        # Registrar el evento financiero formal en el feed del Dashboard
         evento = EventoFinanciero(
             tipo_evento=TipoEvento.PAGO_RECIBIDO,
             monto=total_abonado_efectivo,
-            usuario=usuario_actual,
-            observacion=f"Pago inteligente distribuido en cuotas. {observacion}"
+            usuario=current_user,
+            observacion=obs_caja,
+            creado_en=datetime.now()
         )
 
         self.db.add(evento)
