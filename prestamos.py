@@ -1,17 +1,20 @@
 """
 prestamos.py
 
-Vista y controlador para la gestión de préstamos, simulaciones y generación de paz y salvos.
+Vista y controlador para la gestión de préstamos, simulaciones, generación de paz y salvos,
+visualización de cuotas y motor de abonos inteligentes.
 """
 
 from decimal import Decimal
+from datetime import date
 import io
 import streamlit as st
 
-# Importaciones planas corregidas para la estructura de tu proyecto
+# Importaciones planas para la estructura de tu proyecto
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
+from app.models.prestamo import Cuota, EstadoCuota, EstadoPrestamo
 
 # ReportLab para generación de PDFs
 from reportlab.lib.pagesizes import letter
@@ -87,9 +90,9 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
     return pdf_bytes
 
 
-def render_prestamos():
+def render_prestamos(usuario_actual: str = "admin"):
     st.markdown("## 💳 Gestión de Préstamos y Cartera")
-    st.caption("Control de créditos activos, simulaciones financieras y emisión de paz y salvos")
+    st.caption("Control de créditos activos, visualización de cuotas, simulaciones financieras y emisión de paz y salvos")
 
     db = SessionLocal()
 
@@ -97,6 +100,7 @@ def render_prestamos():
         prestamo_repo = PrestamoRepository(db)
         cliente_repo = ClienteRepository(db)
 
+        # Listar respetando la sesión o filtros del repositorio
         clientes = cliente_repo.listar_todos()
         prestamos_activos = prestamo_repo.listar_activos()
 
@@ -115,7 +119,6 @@ def render_prestamos():
             if not clientes:
                 st.warning("⚠️ No hay clientes registrados en el sistema. Debe registrar uno antes de crear un préstamo.")
             else:
-                # Diccionario seguro con formato id para evitar colisiones por nombres duplicados
                 clientes_dict = {f"{c.nombre_completo} (ID: {c.id})": c for c in clientes if hasattr(c, "nombre_completo")}
                 
                 with st.form("form_nuevo_prestamo", clear_on_submit=True):
@@ -124,10 +127,11 @@ def render_prestamos():
                     col_p1, col_p2 = st.columns(2)
                     with col_p1:
                         capital = st.number_input("Capital a Prestar ($) *", min_value=10.0, step=100.0, format="%.2f")
-                    with col_p2:
                         tasa_interes = st.number_input("Tasa de Interés (%) *", min_value=0.0, step=0.5, format="%.2f")
+                    with col_p2:
+                        numero_cuotas = st.number_input("Número de Cuotas *", min_value=1, step=1, value=1)
+                        plazo_dias = st.number_input("Plazo Total en Días *", min_value=1, step=1, value=30)
                         
-                    plazo_dias = st.number_input("Plazo en Días *", min_value=1, step=1, value=30)
                     observacion = st.text_area("Observaciones o Destino del Préstamo", placeholder="Ej. Capital de trabajo para mercancía")
                     
                     btn_crear = st.form_submit_button("Crear Préstamo", type="primary", use_container_width=True)
@@ -135,6 +139,7 @@ def render_prestamos():
                     if btn_crear:
                         cliente_obj = clientes_dict[cliente_seleccionado_str]
                         try:
+                            # Tu método de repositorio existente para crear préstamo
                             prestamo_repo.crear_prestamo(
                                 cliente_id=cliente_obj.id,
                                 capital=Decimal(str(capital)),
@@ -148,16 +153,22 @@ def render_prestamos():
                             st.error(f"❌ Error al crear el préstamo: {ex}")
 
         # ==========================================
-        # TAB 2: PRÉSTAMOS ACTIVOS
+        # TAB 2: PRÉSTAMOS ACTIVOS Y CUOTAS (CON MOTOR DE ABONOS)
         # ==========================================
         with tab_lista:
-            st.subheader("Listado de Préstamos Vigentes")
+            st.subheader("Listado de Préstamos Vigentes y Cuotas")
             
             if not prestamos_activos:
                 st.info("ℹ️ No hay préstamos activos en este momento.")
             else:
                 for p in prestamos_activos:
-                    with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} - Cliente ID: {getattr(p, 'cliente_id', 'N/A')}"):
+                    nombre_cli = "Cliente General"
+                    for c in clientes:
+                        if c.id == p.cliente_id:
+                            nombre_cli = c.nombre_completo
+                            break
+
+                    with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} — {nombre_cli} | Capital: ${getattr(p, 'capital', 0.0):,.2f}"):
                         c_info1, c_info2 = st.columns(2)
                         with c_info1:
                             st.write(f"**Capital Inicial:** ${getattr(p, 'capital', 0.0):,.2f}")
@@ -165,18 +176,94 @@ def render_prestamos():
                             st.write(f"**Tasa de Interés:** {tasa_val}%")
                         with c_info2:
                             plazo_val = getattr(p, 'numero_cuotas', None) if getattr(p, 'numero_cuotas', None) is not None else getattr(p, 'plazo_dias', 0)
-                            st.write(f"**Plazo:** {plazo_val} días")
+                            st.write(f"**Plazo / Cuotas:** {plazo_val}")
                             estado_val = getattr(p, 'estado', 'ACTIVO')
                             estado_str = estado_val.value if hasattr(estado_val, 'value') else str(estado_val)
                             st.write(f"Estado: **{estado_str}**")
+
+                        st.markdown("---")
+                        st.markdown("### 📊 Tabla de Cuotas y Control de Saldo")
+
+                        # Obtener cuotas asociadas al préstamo actual ordenadas por número de cuota
+                        cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == p.id).order_by(Cuota.numero_cuota).all()
+
+                        if not cuotas_prestamo:
+                            st.warning("⚠️ Este préstamo no tiene cuotas generadas en el sistema.")
+                        else:
+                            # Renderizar tabla visual de cuotas
+                            datos_cuotas = []
+                            for cuota in cuotas_prestamo:
+                                saldo_pend = cuota.monto_cuota - cuota.monto_pagado
+                                estado_cuota_str = cuota.estado.value if hasattr(cuota.estado, 'value') else str(cuota.estado)
+                                datos_cuotas.append({
+                                    "N° Cuota": cuota.numero_cuota,
+                                    "Monto Cuota ($)": float(cuota.monto_cuota),
+                                    "Pagado ($)": float(cuota.monto_pagado),
+                                    "Saldo Pendiente ($)": float(saldo_pend),
+                                    "Vencimiento": str(cuota.fecha_pago_esperada),
+                                    "Estado": estado_cuota_str
+                                })
                             
-                        # Botón persistente para descargar Paz y Salvo sin desaparecer
-                        nombre_cli = "Cliente General"
-                        for c in clientes:
-                            if c.id == p.cliente_id:
-                                nombre_cli = c.nombre_completo
-                                break
-                                
+                            st.dataframe(datos_cuotas, use_container_width=True)
+
+                            # 💡 Formulario de entrada de abono con segmentación inteligente
+                            st.markdown("#### 💰 Registrar Abono / Pago Inteligente")
+                            st.caption("El sistema distribuirá automáticamente el abono cubriendo las cuotas pendientes en orden cronológico.")
+
+                            with st.form(key=f"form_abono_{p.id}"):
+                                col_val, col_btn = st.columns([2, 1])
+                                with col_val:
+                                    valor_abono = st.number_input(
+                                        f"Valor del Abono ($) [Préstamo #{p.id}]",
+                                        min_value=1.0,
+                                        step=10.0,
+                                        format="%.2f",
+                                        key=f"input_abono_{p.id}"
+                                    )
+                                with col_btn:
+                                    st.text("") # Espaciador
+                                    st.text("")
+                                    btn_procesar = st.form_submit_button("Aplicar Abono", type="primary", use_container_width=True)
+
+                                if btn_procesar:
+                                    monto_restante = Decimal(str(valor_abono))
+                                    
+                                    # Motor inteligente de distribución de pagos por cuota
+                                    for cuota in cuotas_prestamo:
+                                        if monto_restante <= 0:
+                                            break
+                                        
+                                        saldo_pendiente = cuota.monto_cuota - cuota.monto_pagado
+                                        if saldo_pendiente <= 0:
+                                            continue  # Cuota ya pagada
+                                        
+                                        if monto_restante >= saldo_pendiente:
+                                            monto_restante -= saldo_pendiente
+                                            cuota.monto_pagado = cuota.monto_cuota
+                                            cuota.estado = EstadoCuota.PAGADA
+                                            cuota.fecha_pago_real = date.today()
+                                        else:
+                                            cuota.monto_pagado += monto_restante
+                                            cuota.estado = EstadoCuota.PARCIAL
+                                            cuota.fecha_pago_real = date.today()
+                                            monto_restante = Decimal("0.00")
+
+                                    db.commit()
+
+                                    # Validar si todas las cuotas quedaron pagadas para liquidar el préstamo automáticamente
+                                    cuotas_verificacion = db.query(Cuota).filter(Cuota.prestamo_id == p.id).all()
+                                    if all(c.estado == EstadoCuota.PAGADA for c in cuotas_verificacion):
+                                        p.estado = EstadoPrestamo.LIQUIDADO
+                                        db.commit()
+                                        st.success(f"🎯 ¡Todas las cuotas cubiertas! El Préstamo #{p.id} ha sido marcado como **LIQUIDADO**.")
+                                    else:
+                                        st.success("✅ Abono aplicado e integrado correctamente sobre las cuotas pendientes.")
+                                    
+                                    st.rerun()
+
+                        st.divider()
+
+                        # Botón persistente para descargar Paz y Salvo
                         pdf_data = generar_pdf_paz_y_salvo(nombre_cli, p.id)
                         st.download_button(
                             label=f"📥 Descargar PDF de Paz y Salvo (Préstamo #{p.id})",
