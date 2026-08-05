@@ -12,21 +12,27 @@ from app.repositories.cliente_repository import ClienteRepository
 from app.repositories.prestamo_repository import PrestamoRepository
 
 
-def render_dashboard():
+def render_dashboard(usuario_actual: str = "admin"):
+    # Normalización limpia del usuario actual para respetar las sesiones del sistema
+    current_user = str(usuario_actual or "admin").strip().lower()
+
     st.markdown("## 📊 Dashboard General")
     st.caption("Resumen en tiempo real del estado financiero y de cartera")
 
     db = SessionLocal()
 
     try:
-        caja_service = CajaService(db)
+        # Se pasa el usuario actual a los servicios y repositorios para mantener el aislamiento correcto
+        caja_service = CajaService(db, usuario_actual=current_user)
         cliente_repo = ClienteRepository(db)
         prestamo_repo = PrestamoRepository(db)
 
-        # Obtener información
+        # Obtener información filtrada por la sesión actual si el sistema lo requiere
         resumen = caja_service.obtener_resumen_financiero()
         clientes = cliente_repo.listar_todos()
-        prestamos_activos = prestamo_repo.listar_activos()
+        
+        # Filtro de préstamos activos según el usuario activo o administrador global
+        prestamos_activos = prestamo_repo.obtener_por_usuario(current_user) if current_user != "admin" else prestamo_repo.listar_activos()
         
         # Validación segura para eventos recientes
         ultimos_eventos = []
@@ -34,7 +40,10 @@ def render_dashboard():
             ultimos_eventos = prestamo_repo.listar_ultimos_eventos(limite=8)
         else:
             from app.models.evento import EventoFinanciero
-            ultimos_eventos = db.query(EventoFinanciero).order_by(EventoFinanciero.creado_en.desc()).limit(8).all()
+            query_ev = db.query(EventoFinanciero)
+            if current_user != "admin":
+                query_ev = query_ev.filter(EventoFinanciero.usuario == current_user)
+            ultimos_eventos = query_ev.order_by(EventoFinanciero.creado_en.desc()).limit(8).all()
 
         total_clientes = len(clientes)
         clientes_activos = len(
@@ -111,7 +120,7 @@ def render_dashboard():
         st.subheader("🕒 Últimos Movimientos")
 
         if not ultimos_eventos:
-            st.info("No existen movimientos registrados.")
+            st.info("No existen movimientos registrados para este usuario.")
 
         else:
             for evento in ultimos_eventos:
