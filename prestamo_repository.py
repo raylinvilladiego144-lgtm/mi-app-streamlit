@@ -1,7 +1,7 @@
 """
 prestamo_repository.py
 Repositorio con validación para evitar duplicar préstamos idénticos al mismo cliente 
-y motor de recálculo por temporalidad y vencimiento mensual.
+y motor de recálculo por temporalidad y vencimiento mensual, conectado al servicio de eventos.
 """
 
 from datetime import datetime, timedelta
@@ -35,8 +35,8 @@ class PrestamoRepository:
         **kwargs  # Captura cualquier otro argumento adicional inesperado para evitar errores de tipo
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente 
-        y conecta el desembolso directamente con el módulo de caja y dashboard.
+        Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente,
+        descuenta de caja y registra el evento financiero para alimentar el dashboard correctamente.
         """
         cliente_obj = None
 
@@ -139,11 +139,11 @@ class PrestamoRepository:
             )
             self.db.add(nueva_cuota)
 
-        # 3. Conexión automática con el Dashboard y Caja (Desembolso del crédito)
+        # 3. Integración con Caja y Dashboard (Desembolso y Registro de Evento)
         caja_service = CajaService(self.db, usuario_actual=str(usuario or "admin"))
-        movimiento_registrado = False
-        obs_caja = f"Desembolso por Crédito Otorgado (Préstamo #{nuevo_prestamo.id})"
+        obs_caja = f"Desembolso por Crédito Otorgado a {cliente_obj.nombre_completo} (Préstamo #{nuevo_prestamo.id})"
         
+        movimiento_registrado = False
         for metodo_caja in ["registrar_egreso", "registrar_retiro", "egresar", "retirar"]:
             if hasattr(caja_service, metodo_caja):
                 try:
@@ -165,9 +165,33 @@ class PrestamoRepository:
                 caja_service.caja.saldo_disponible -= cap_dec
                 self.db.add(caja_service.caja)
 
+        # Registrar de forma segura el EventoFinanciero para que el dashboard lo muestre en "Últimos Movimientos"
+        try:
+            from app.models.evento import EventoFinanciero, TipoEvento
+            evento = EventoFinanciero(
+                tipo_evento=TipoEvento.DESEMBOLSO if hasattr(TipoEvento, "DESEMBOLSO") else "DESEMBOLSO",
+                monto=cap_dec,
+                observacion=obs_caja,
+                usuario=str(usuario or "admin"),
+                creado_en=datetime.now()
+            )
+            self.db.add(evento)
+        except Exception:
+            pass
+
         self.db.commit()
         self.db.refresh(nuevo_prestamo)
         return nuevo_prestamo
+
+    def listar_ultimos_eventos(self, limite: int = 8):
+        """
+        Retorna los últimos eventos financieros registrados para el dashboard.
+        """
+        try:
+            from app.models.evento import EventoFinanciero
+            return self.db.query(EventoFinanciero).order_by(EventoFinanciero.creado_en.desc()).limit(limite).all()
+        except Exception:
+            return []
 
     def evaluar_y_recalcular_temporalidad_mensual(self, usuario: str = None):
         """
@@ -195,20 +219,15 @@ class PrestamoRepository:
             ]
 
             for cuota in cuotas_pendientes:
-                # Comprobar si la fecha esperada está en un mes/año anterior al actual (fuera de rango mensual)
                 if cuota.fecha_pago_esperada < hoy:
-                    # Validar si ya cruzó un cambio de mes completo fuera del rango original
                     if (hoy.year > cuota.fecha_pago_esperada.year) or \
                        (hoy.year == cuota.fecha_pago_esperada.year and hoy.month > cuota.fecha_pago_esperada.month):
                         
                         saldo_pendiente_cuota = cuota.monto_cuota - (cuota.monto_pagado or Decimal("0.00"))
-                        
-                        # Evitar recálculos duplicados masivos en el mismo mes si ya fue ajustado
                         marca_recalculo = f"[Recalculado Mes {hoy.month}/{hoy.year}]"
                         obs_actual = getattr(cuota, "observaciones", "") or ""
                         
                         if marca_recalculo not in obs_actual:
-                            # Recálculo del interés sobre el saldo vencido usando el mismo % original
                             interes_adicional = saldo_pendiente_cuota * tasa_dec
                             cuota.monto_cuota += interes_adicional
                             p.monto_total += interes_adicional
