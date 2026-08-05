@@ -63,7 +63,7 @@ class CajaService:
 
     def obtener_resumen_financiero(self) -> Dict[str, Decimal]:
         """
-        Reconstruye el estado financiero leyendo únicamente el historial del usuario actual.
+        Reconstruye el estado financiero leyendo el historial y la cartera activa del usuario actual.
         """
         query_eventos = self.db.query(EventoFinanciero)
         if hasattr(EventoFinanciero, "usuario"):
@@ -100,12 +100,14 @@ class CajaService:
 
         for prestamo in prestamos_activos:
             if hasattr(prestamo, "cuotas") and prestamo.cuotas:
+                saldo_prestamo_activo = Decimal("0.00")
                 for cuota in prestamo.cuotas:
                     if cuota.estado != EstadoCuota.PAGADA:
                         monto_pagado = cuota.monto_pagado or Decimal("0.00")
                         saldo_cuota = cuota.monto_cuota - monto_pagado
                         if saldo_cuota > Decimal("0.00"):
-                            capital_prestado += saldo_cuota
+                            saldo_prestamo_activo += saldo_cuota
+                capital_prestado += saldo_prestamo_activo if saldo_prestamo_activo > 0 else prestamo.capital
             else:
                 capital_prestado += prestamo.capital
 
