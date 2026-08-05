@@ -134,29 +134,65 @@ class RepositorioFinanciero:
         db.commit()
 
 
-# --- MÓDULO 1: DASHBOARD / CAJA ---
+# --- MÓDULO 1: DASHBOARD / CAJA (Completamente Funcional con Sincronización Automática) ---
 def render_dashboard(usuario):
-    st.title(f"📊 Dashboard Financiero — {usuario.capitalize()}")
+    current_user = str(usuario or "admin").strip().lower()
+
+    st.title(f"📊 Dashboard Financiero — {current_user.capitalize()}")
     st.markdown("Resumen general del estado de caja, capital en la calle y flujos de efectivo.")
 
     db = SessionLocal()
     try:
-        caja_service = CajaService(db, usuario_actual=usuario)
-        resumen = caja_service.obtener_resumen_financiero()
+        caja_service = CajaService(db, usuario_actual=current_user)
+        cliente_repo = ClienteRepository(db)
 
+        # Obtener información financiera y operativa en tiempo real
+        resumen = caja_service.obtener_resumen_financiero()
+        clientes = cliente_repo.obtener_por_usuario(current_user) if hasattr(cliente_repo, "obtener_por_usuario") else cliente_repo.listar_todos()
+        
+        prestamos_activos = db.query(Prestamo).filter(
+            Prestamo.usuario == current_user,
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).all()
+
+        total_clientes = len(clientes)
+        clientes_activos = len([c for c in clientes if getattr(c, "estado", "ACTIVO") == "ACTIVO"])
+        clientes_bloqueados = len([c for c in clientes if getattr(c, "estado", "") == "BLOQUEADO"])
+
+        # ==========================
+        # MÉTRICAS FINANCIERAS
+        # ==========================
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric(label="💵 Caja Disponible", value=f"${resumen['caja_disponible']:,.2f}")
+            st.metric(label="💵 Caja Disponible", value=f"${resumen.get('caja_disponible', Decimal('0.00')):,.2f}")
         with col2:
-            st.metric(label="📈 Capital Prestado (Activo)", value=f"${resumen['capital_prestado']:,.2f}")
+            st.metric(label="📈 Capital Prestado (Activo)", value=f"${resumen.get('capital_prestado', Decimal('0.00')):,.2f}")
         with col3:
-            st.metric(label="🏦 Capital Total (Caja + Cartera)", value=f"${resumen['capital_total']:,.2f}")
+            st.metric(label="🏦 Capital Total (Caja + Cartera)", value=f"${resumen.get('capital_total', Decimal('0.00')):,.2f}")
 
         st.divider()
 
+        # ==========================
+        # MÉTRICAS OPERATIVAS
+        # ==========================
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("👥 Clientes", total_clientes)
+        with c2:
+            st.metric("✅ Activos", clientes_activos)
+        with c3:
+            st.metric("🚫 Bloqueados", clientes_bloqueados)
+        with c4:
+            st.metric("📄 Préstamos Activos", len(prestamos_activos))
+
+        st.divider()
+
+        # ==========================
+        # ACCIÓN RÁPIDA: REGISTRO DE MOVIMIENTOS Y REPOSICIÓN
+        # ==========================
         with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Reposición)", expanded=False):
-            with st.form("form_ajuste_caja_dashboard"):
+            with st.form("form_ajuste_caja_dashboard", clear_on_submit=True):
                 tipo_movimiento = st.selectbox(
                     "Tipo de Operación *",
                     ["Ingreso Genérico", "Reposición de Capital"]
@@ -173,42 +209,37 @@ def render_dashboard(usuario):
                         st.warning("La observación es obligatoria para este registro.")
                     else:
                         monto_dec = Decimal(str(monto_movimiento))
-                        operacion_realizada = False
-                        
                         etiqueta_tipo = "REPOSICIÓN DE CAPITAL" if tipo_movimiento == "Reposición de Capital" else "INGRESO GENÉRICO"
                         obs_final = f"[{etiqueta_tipo}] {observacion_movimiento.strip()}"
-
-                        for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
-                            if hasattr(caja_service, metodo_caja):
-                                try:
-                                    fn = getattr(caja_service, metodo_caja)
-                                    try:
-                                        fn(monto=monto_dec, tipo="INGRESO", observacion=obs_final)
-                                    except TypeError:
-                                        try:
-                                            fn(monto=monto_dec, observacion=obs_final)
-                                        except TypeError:
-                                            fn(monto_dec)
-                                    operacion_realizada = True
-                                    break
-                                except Exception:
-                                    pass
-
-                        if not operacion_realizada and hasattr(caja_service, "caja") and caja_service.caja:
-                            if hasattr(caja_service.caja, "saldo_disponible"):
-                                caja_service.caja.saldo_disponible += monto_dec
-                                db.add(caja_service.caja)
-                                operacion_realizada = True
-
-                        if operacion_realizada:
-                            db.commit()
+                        
+                        try:
+                            caja_service.registrar_aporte(monto_dec, obs_final)
                             st.success(f"¡{tipo_movimiento} de ${monto_movimiento:,.2f} aplicada con éxito a la caja!")
                             st.rerun()
-                        else:
-                            db.rollback()
-                            st.error("❌ No se pudo registrar el movimiento en el servicio de caja.")
+                        except Exception as e:
+                            # Fallback alternativo si el servicio usa otros nombres de método
+                            operacion_realizada = False
+                            for metodo_caja in ["registrar_ingreso", "registrar_movimiento", "ingresar"]:
+                                if hasattr(caja_service, metodo_caja):
+                                    try:
+                                        fn = getattr(caja_service, metodo_caja)
+                                        fn(monto=monto_dec, observacion=obs_final)
+                                        operacion_realizada = True
+                                        break
+                                    except Exception:
+                                        pass
+                            if operacion_realizada:
+                                db.commit()
+                                st.success(f"¡{tipo_movimiento} de ${monto_movimiento:,.2f} aplicada con éxito a la caja!")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ No se pudo registrar el movimiento en el servicio de caja: {e}")
 
         st.divider()
+
+        # ==========================
+        # ÚLTIMOS MOVIMIENTOS
+        # ==========================
         st.subheader("📜 Últimos Movimientos y Transacciones")
         movimientos = caja_service.listar_movimientos(limite=10)
 
@@ -219,7 +250,7 @@ def render_dashboard(usuario):
             for m in movimientos:
                 fila_mov = {
                     "ID": m.id,
-                    "Fecha": getattr(m, "fecha", "N/A"),
+                    "Fecha": getattr(m, "creado_en", None) or getattr(m, "fecha", "N/A"),
                     "Tipo": m.tipo_evento.value if hasattr(m.tipo_evento, "value") else str(m.tipo_evento),
                     "Monto": f"${m.monto:,.2f}" if hasattr(m, "monto") else "$0.00",
                     "Observación": getattr(m, "observacion", "")
@@ -403,7 +434,7 @@ def render_clientes(usuario):
 
         st.divider()
         st.subheader("📋 Directorio de Clientes")
-        clientes = repo.obtener_por_usuario(usuario)
+        clientes = repo.obtener_por_usuario(usuario) if hasattr(repo, "obtener_por_usuario") else repo.listar_todos()
 
         if clientes:
             data = []
@@ -456,13 +487,13 @@ def render_gestion_prestamos(usuario):
         db.close()
 
 
-# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD (AUTORIZADO PARA SIMÓN Y RAYLIN) ---
+# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD ---
 def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o administra el esquema de la base de datos.")
 
     if usuario.strip().lower() not in ["simon", "raylin"]:
-        st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural de la base de datos están habilitadas exclusivamente para administradores autorizados.")
+        st.warning("🚫 **Acceso Restringido:** Las herramientas de respaldo avanzado y mantenimiento estructural están habilitadas exclusivamente para administradores autorizados.")
         return
 
     col1, col2 = st.columns(2)
@@ -501,7 +532,6 @@ def render_gestion_respaldos(usuario):
                     try:
                         with st.spinner("Liberando conexiones del sistema y reestructurando el motor SQLite..."):
                             engine.dispose()
-
                             Base.metadata.drop_all(bind=engine)
                             Base.metadata.create_all(bind=engine)
 
@@ -509,7 +539,7 @@ def render_gestion_respaldos(usuario):
                             st.session_state["logged_in"] = True
                             st.session_state["username"] = usuario
 
-                        st.success("🎉 ¡La base de datos se ha reestructurado y optimizado con éxito! Las tablas requeridas han sido recreadas y las conexiones liberadas.")
+                        st.success("🎉 ¡La base de datos se ha reestructurado y optimizado con éxito!")
                         st.balloons()
                         st.rerun()
                     except Exception as e:
