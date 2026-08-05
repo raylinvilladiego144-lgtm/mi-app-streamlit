@@ -52,10 +52,10 @@ def render_caja(usuario_actual: str = "admin"):
             with st.expander("📥 Registrar Aporte de Capital", expanded=False):
                 with st.form("form_aporte", clear_on_submit=True):
                     monto_aporte = st.number_input(
-                        "Monto a ingresar ($) *", min_value=1.0, step=1000.0, format="%.2f"
+                        "Monto a ingresar ($) *", min_value=1.0, step=1000.0, format="%.2f", key="input_monto_aporte_caja"
                     )
                     obs_aporte = st.text_input(
-                        "Observación / Concepto *", placeholder="Ej. Inyección de capital inicial"
+                        "Observación / Concepto *", placeholder="Ej. Inyección de capital inicial", key="input_obs_aporte_caja"
                     )
                     btn_aporte = st.form_submit_button(
                         "Aportar a Caja", type="primary", use_container_width=True
@@ -75,10 +75,10 @@ def render_caja(usuario_actual: str = "admin"):
             with st.expander("📤 Registrar Retiro de Caja", expanded=False):
                 with st.form("form_retiro", clear_on_submit=True):
                     monto_retiro = st.number_input(
-                        "Monto a retirar ($) *", min_value=1.0, step=1000.0, format="%.2f"
+                        "Monto a retirar ($) *", min_value=1.0, step=1000.0, format="%.2f", key="input_monto_retiro_caja"
                     )
                     obs_retiro = st.text_input(
-                        "Observación / Concepto *", placeholder="Ej. Retiro de ganancias parciales"
+                        "Observación / Concepto *", placeholder="Ej. Retiro de ganancias parciales", key="input_obs_retiro_caja"
                     )
                     btn_retiro = st.form_submit_button(
                         "Retirar de Caja", type="secondary", use_container_width=True
