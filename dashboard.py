@@ -126,53 +126,6 @@ def render_dashboard(usuario_actual: str = "admin"):
         st.divider()
 
         # ==========================
-        # ACCIÓN RÁPIDA: APORTE / CAJA INICIAL
-        # ==========================
-        with st.expander(
-            "⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Aporte Inicial)"
-        ):
-            with st.form("form_aporte_rapido", clear_on_submit=True):
-                col_monto, col_obs = st.columns([1, 2])
-                with col_monto:
-                    monto_aporte = st.number_input(
-                        "Monto ($)",
-                        min_value=1.0,
-                        step=1000.0,
-                        format="%.2f",
-                        value=100000.0,
-                    )
-                with col_obs:
-                    obs_aporte = st.text_input(
-                        "Descripción / Motivo",
-                        value="Aporte inicial de capital o base en caja",
-                    )
-
-                btn_guardar_aporte = st.form_submit_button(
-                    "Registrar Ingreso en Caja",
-                    type="primary",
-                    use_container_width=True,
-                )
-                if btn_guardar_aporte:
-                    try:
-                        monto_dec = Decimal(str(monto_aporte))
-                        if hasattr(caja_service, "registrar_aporte"):
-                            caja_service.registrar_aporte(monto_dec, obs_aporte)
-                        elif hasattr(caja_service, "registrar_ingreso"):
-                            caja_service.registrar_ingreso(monto_dec, obs_aporte)
-                        else:
-                            if hasattr(caja_service, "caja") and caja_service.caja:
-                                caja_service.caja.saldo_disponible += monto_dec
-                                db.add(caja_service.caja)
-                                db.commit()
-                        st.success("✅ ¡Ingreso registrado con éxito en tu caja!")
-                        st.rerun()
-                    except Exception as e:
-                        db.rollback()
-                        st.error(f"❌ Error al registrar el movimiento: {e}")
-
-        st.divider()
-
-        # ==========================
         # MÉTRICAS OPERATIVAS
         # ==========================
 
