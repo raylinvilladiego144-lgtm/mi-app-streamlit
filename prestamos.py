@@ -91,6 +91,9 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
 
 
 def render_prestamos(usuario_actual: str = "admin"):
+    # Normalización limpia de usuario para respetar sesiones
+    current_user = str(usuario_actual or "admin").strip().lower()
+
     st.markdown("## 💳 Gestión de Préstamos y Cartera")
     st.caption("Control de créditos activos, visualización de cuotas, simulaciones financieras y emisión de paz y salvos")
 
@@ -100,9 +103,9 @@ def render_prestamos(usuario_actual: str = "admin"):
         prestamo_repo = PrestamoRepository(db)
         cliente_repo = ClienteRepository(db)
 
-        # Listar respetando la sesión o filtros del repositorio
+        # Listar respetando la sesión actual del usuario o administrador
         clientes = cliente_repo.listar_todos()
-        prestamos_activos = prestamo_repo.listar_activos()
+        prestamos_activos = prestamo_repo.obtener_por_usuario(current_user) if current_user != "admin" else prestamo_repo.listar_activos()
 
         tab_nuevo, tab_lista, tab_simulador = st.tabs([
             "➕ Nuevo Préstamo", 
@@ -139,15 +142,17 @@ def render_prestamos(usuario_actual: str = "admin"):
                     if btn_crear:
                         cliente_obj = clientes_dict[cliente_seleccionado_str]
                         try:
-                            # Tu método de repositorio existente para crear préstamo
+                            # Pasamos explícitamente el usuario actual para ligar la caja y el crédito
                             prestamo_repo.crear_prestamo(
                                 cliente_id=cliente_obj.id,
                                 capital=Decimal(str(capital)),
                                 tasa_interes=Decimal(str(tasa_interes)),
+                                num_cuotas=int(numero_cuotas),
                                 plazo_dias=int(plazo_dias),
-                                observaciones=observacion
+                                observaciones=observacion,
+                                usuario=current_user
                             )
-                            st.success("🎉 ¡Préstamo creado con éxito!")
+                            st.success("🎉 ¡Préstamo creado con éxito y registrado en caja!")
                             st.rerun()
                         except Exception as ex:
                             st.error(f"❌ Error al crear el préstamo: {ex}")
@@ -159,7 +164,7 @@ def render_prestamos(usuario_actual: str = "admin"):
             st.subheader("Listado de Préstamos Vigentes y Cuotas")
             
             if not prestamos_activos:
-                st.info("ℹ️ No hay préstamos activos en este momento.")
+                st.info("ℹ️ No hay préstamos activos registrados para este usuario.")
             else:
                 for p in prestamos_activos:
                     nombre_cli = "Cliente General"
