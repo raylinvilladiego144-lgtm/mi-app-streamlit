@@ -1,6 +1,6 @@
 """
 main.py
-Punto de entrada principal con Login, Dashboard financiero, Préstamos, Pagos, Clientes, Gestión y Respaldos (Arquitectura Plana).
+Punto de entrada principal con Login, Dashboard financiero integrado, Préstamos, Pagos, Clientes, Gestión y Respaldos.
 """
 
 from datetime import datetime, timedelta
@@ -133,8 +133,46 @@ class RepositorioFinanciero:
         db.delete(prestamo)
         db.commit()
 
+    @staticmethod
+    def procesar_refinanciacion(db: SessionLocal, prestamo_id: int, nuevo_plazo: int, nueva_tasa: float, usuario: str):
+        """
+        Proceso de refinanciación: evalúa el saldo pendiente, reestructura las cuotas 
+        restantes y genera un nuevo plan de amortización.
+        """
+        prestamo = db.query(Prestamo).filter(Prestamo.id == prestamo_id, Prestamo.usuario == usuario).first()
+        if not prestamo:
+            raise ValueError("El préstamo no existe o no pertenece al usuario.")
+        
+        cuotas_pendientes = db.query(Cuota).filter(
+            Cuota.prestamo_id == prestamo_id,
+            Cuota.estado.in_([EstadoCuota.PENDIENTE, EstadoCuota.PARCIAL])
+        ).all()
+        
+        saldo_pendiente = sum([c.monto_cuota - c.monto_pagado for c in cuotas_pendientes])
+        
+        if saldo_pendiente <= 0:
+            raise ValueError("El préstamo no tiene saldo pendiente para refinanciar.")
 
-# --- MÓDULO 1: DASHBOARD / CAJA (Completamente Funcional con Sincronización Automática) ---
+        for c in cuotas_pendientes:
+            c.estado = EstadoCuota.PAGADA
+            db.add(c)
+        
+        monto_nueva_cuota = saldo_pendiente / Decimal(str(nuevo_plazo))
+        for i in range(1, nuevo_plazo + 1):
+            nueva_cuota = Cuota(
+                prestamo_id=prestamo.id,
+                numero_cuota=i,
+                monto_cuota=monto_nueva_cuota,
+                monto_pagado=Decimal("0.00"),
+                estado=EstadoCuota.PENDIENTE
+            )
+            db.add(nueva_cuota)
+        
+        db.commit()
+        return True
+
+
+# --- MÓDULO 1: DASHBOARD / CAJA ---
 def render_dashboard(usuario):
     current_user = str(usuario or "admin").strip().lower()
 
@@ -146,7 +184,6 @@ def render_dashboard(usuario):
         caja_service = CajaService(db, usuario_actual=current_user)
         cliente_repo = ClienteRepository(db)
 
-        # Obtener información financiera y operativa en tiempo real
         resumen = caja_service.obtener_resumen_financiero()
         clientes = cliente_repo.obtener_por_usuario(current_user) if hasattr(cliente_repo, "obtener_por_usuario") else cliente_repo.listar_todos()
         
@@ -159,11 +196,7 @@ def render_dashboard(usuario):
         clientes_activos = len([c for c in clientes if getattr(c, "estado", "ACTIVO") == "ACTIVO"])
         clientes_bloqueados = len([c for c in clientes if getattr(c, "estado", "") == "BLOQUEADO"])
 
-        # ==========================
-        # MÉTRICAS FINANCIERAS
-        # ==========================
         col1, col2, col3 = st.columns(3)
-
         with col1:
             st.metric(label="💵 Caja Disponible", value=f"${resumen.get('caja_disponible', Decimal('0.00')):,.2f}")
         with col2:
@@ -173,9 +206,6 @@ def render_dashboard(usuario):
 
         st.divider()
 
-        # ==========================
-        # MÉTRICAS OPERATIVAS
-        # ==========================
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.metric("👥 Clientes", total_clientes)
@@ -188,9 +218,35 @@ def render_dashboard(usuario):
 
         st.divider()
 
-        # ==========================
-        # ÚLTIMOS MOVIMIENTOS
-        # ==========================
+        with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Aporte Inicial)", expanded=False):
+            with st.form("form_aporte_rapido", clear_on_submit=True):
+                col_monto, col_obs = st.columns([1, 2])
+                with col_monto:
+                    monto_aporte = st.number_input("Monto ($)", min_value=1.0, step=1000.0, format="%.2f", value=100000.0)
+                with col_obs:
+                    obs_aporte = st.text_input("Descripción / Motivo", value="Aporte inicial de capital o base en caja")
+                
+                btn_guardar_aporte = st.form_submit_button("Registrar Ingreso en Caja", type="primary", use_container_width=True)
+                if btn_guardar_aporte:
+                    try:
+                        monto_dec = Decimal(str(monto_aporte))
+                        if hasattr(caja_service, "registrar_aporte"):
+                            caja_service.registrar_aporte(monto_dec, obs_aporte)
+                        elif hasattr(caja_service, "registrar_ingreso"):
+                            caja_service.registrar_ingreso(monto_dec, obs_aporte)
+                        else:
+                            if hasattr(caja_service, "caja") and caja_service.caja:
+                                caja_service.caja.saldo_disponible += monto_dec
+                                db.add(caja_service.caja)
+                                db.commit()
+                        st.success("✅ ¡Ingreso registrado con éxito en tu caja!")
+                        st.rerun()
+                    except Exception as e:
+                        db.rollback()
+                        st.error(f"❌ Error al registrar el movimiento: {e}")
+
+        st.divider()
+
         st.subheader("📜 Últimos Movimientos y Transacciones")
         movimientos = caja_service.listar_movimientos(limite=10)
 
@@ -267,7 +323,6 @@ def render_pagos(usuario):
         cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == prestamo_cal.id).order_by(Cuota.numero_cuota.asc()).all()
         mapa_cuotas = {c.numero_cuota: c for c in cuotas_prestamo}
 
-        # Estilo visual tipo celda de Excel compacta
         st.markdown("""
             <style>
             .cuota-box {
@@ -302,7 +357,6 @@ def render_pagos(usuario):
             </style>
         """, unsafe_allow_html=True)
 
-        # Renderizar la cuadrícula de 30 espacios en filas de 6 columnas
         for fila in range(5):
             cols = st.columns(6)
             for col_idx in range(6):
@@ -350,10 +404,10 @@ def render_pagos(usuario):
         db.close()
 
 
-# --- MÓDULO 3: CLIENTES ---
+# --- MÓDULO 3: CLIENTES (Con Abono y Refinanciación debajo mediante diagrama de decisión Sí/No) ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
-    st.markdown("Gestión y registro del directorio de clientes.")
+    st.markdown("Gestión de directorio, control de abonos por cliente y opciones de refinanciación integradas.")
 
     db = SessionLocal()
     try:
@@ -384,20 +438,70 @@ def render_clientes(usuario):
                         st.warning("El nombre del cliente es obligatorio.")
 
         st.divider()
-        st.subheader("📋 Directorio de Clientes")
+        st.subheader("📋 Directorio de Clientes y Gestión de Créditos")
         clientes = repo.obtener_por_usuario(usuario) if hasattr(repo, "obtener_por_usuario") else repo.listar_todos()
 
-        if clientes:
-            data = []
-            for c in clientes:
-                fila_cli = {
-                    "ID": c.id, 
-                    "Nombre": getattr(c, "nombre_completo", "N/A")
-                }
-                data.append(fila_cli)
-            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
-        else:
+        if not clientes:
             st.info("No hay clientes registrados todavía.")
+            return
+
+        for c in clientes:
+            with st.expander(f"📁 Cliente: {getattr(c, 'nombre_completo', 'N/A')} (ID: {c.id})"):
+                st.write(f"**Documento:** {getattr(c, 'documento', 'S/D')} | **Teléfono:** {getattr(c, 'telefono', 'S/D')}")
+                
+                prestamos_cliente = db.query(Prestamo).filter(
+                    Prestamo.cliente_id == c.id, 
+                    Prestamo.usuario == usuario,
+                    Prestamo.estado == EstadoPrestamo.ACTIVO
+                ).all()
+
+                if prestamos_cliente:
+                    for p in prestamos_cliente:
+                        st.markdown("---")
+                        st.markdown(f"**Préstamo Activo #{p.id}** — Capital Total: ${p.monto_total:,.2f}")
+                        
+                        # 1. SECCIÓN DE ABONO
+                        st.markdown("### 💰 Registro de Abono")
+                        with st.form(f"form_abono_cli_{c.id}_p_{p.id}"):
+                            monto_ab = st.number_input("Monto a abonar ($)", min_value=0.0, value=25000.0, step=1000.0, key=f"ab_{p.id}")
+                            btn_ab = st.form_submit_button("Aplicar Abono Inteligente", type="primary")
+                            if btn_ab:
+                                try:
+                                    RepositorioFinanciero.registrar_abono(db, p.id, monto_ab, usuario)
+                                    st.success(f"¡Abono de ${monto_ab:,.2f} aplicado correctamente al préstamo #{p.id}!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Error al aplicar abono: {e}")
+
+                        # 2. SECCIÓN DE REFINANCIACIÓN (UBICADA EXACTAMENTE DEBAJO DEL ABONO)
+                        st.markdown("### 🔄 Opción de Refinanciación")
+                        st.caption("Diagrama de decisión: ¿Desea refinanciar este crédito?")
+                        
+                        refinar_decision = st.radio(
+                            "¿Aplicar proceso de refinanciación?",
+                            options=["No", "Sí"],
+                            key=f"radio_ref_{p.id}",
+                            horizontal=True
+                        )
+
+                        if refinar_decision == "Sí":
+                            st.info("Proceso de refinanciación activado. Ingrese los nuevos términos estructurales:")
+                            with st.form(f"form_refinanciar_{p.id}"):
+                                nuevo_plazo = st.number_input("Nuevo Plazo (Número de cuotas)", min_value=1, value=12, step=1)
+                                nueva_tasa = st.number_input("Nueva Tasa / Ajuste (%)", min_value=0.0, value=0.0)
+                                btn_ref = st.form_submit_button("Ejecutar Refinanciación", type="primary")
+
+                                if btn_ref:
+                                    try:
+                                        RepositorioFinanciero.procesar_refinanciacion(db, p.id, int(nuevo_plazo), float(nueva_tasa), usuario)
+                                        st.success(f"¡Préstamo #{p.id} refinanciado con éxito!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Error en la refinanciación: {e}")
+                        else:
+                            st.markdown("*Refinanciación inactiva para este préstamo.*")
+                else:
+                    st.info("Este cliente no tiene préstamos activos asociados para gestionar abonos o refinanciaciones.")
     finally:
         db.close()
 
