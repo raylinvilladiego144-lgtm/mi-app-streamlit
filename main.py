@@ -48,7 +48,6 @@ class RepositorioFinanciero:
         if monto_restante <= 0:
             raise ValueError("El monto del abono debe ser mayor a cero.")
 
-        # Verificar que el préstamo pertenece al usuario
         prestamo = db.query(Prestamo).filter(
             Prestamo.id == prestamo_id,
             Prestamo.usuario == usuario
@@ -57,7 +56,6 @@ class RepositorioFinanciero:
         if not prestamo:
             raise ValueError("El préstamo seleccionado no existe o no pertenece al usuario activo.")
 
-        # Obtener todas las cuotas pendientes o parciales ordenadas por número de cuota
         cuotas_pendientes = db.query(Cuota).filter(
             Cuota.prestamo_id == prestamo_id,
             Cuota.estado.in_([EstadoCuota.PENDIENTE, EstadoCuota.PARCIAL])
@@ -68,12 +66,10 @@ class RepositorioFinanciero:
 
         cuotas_afectadas = []
 
-        # Distribución inteligente del dinero ingresado
         for cuota in cuotas_pendientes:
             if monto_restante <= 0:
                 break
 
-            # Cuánto falta por pagar de esta cuota específica
             saldo_pendiente_cuota = cuota.monto_cuota - cuota.monto_pagado
 
             if monto_restante >= saldo_pendiente_cuota:
@@ -88,7 +84,6 @@ class RepositorioFinanciero:
             db.add(cuota)
             cuotas_afectadas.append(cuota.numero_cuota)
 
-        # Registrar el movimiento de ingreso en la caja general del usuario
         caja_service = CajaService(db, usuario_actual=usuario)
         operacion_exitosa = False
         
@@ -135,10 +130,6 @@ class RepositorioFinanciero:
 
     @staticmethod
     def procesar_refinanciacion(db: SessionLocal, prestamo_id: int, nuevo_plazo: int, nueva_tasa: float, usuario: str):
-        """
-        Proceso de refinanciación: evalúa el saldo pendiente, reestructura las cuotas 
-        restantes y genera un nuevo plan de amortización.
-        """
         prestamo = db.query(Prestamo).filter(Prestamo.id == prestamo_id, Prestamo.usuario == usuario).first()
         if not prestamo:
             raise ValueError("El préstamo no existe o no pertenece al usuario.")
@@ -172,7 +163,7 @@ class RepositorioFinanciero:
         return True
 
 
-# --- MÓDULO 1: DASHBOARD / CAJA ---
+# --- MÓDULO 1: DASHBOARD / CAJA (Con registro funcional integrado directamente) ---
 def render_dashboard(usuario):
     current_user = str(usuario or "admin").strip().lower()
 
@@ -218,8 +209,9 @@ def render_dashboard(usuario):
 
         st.divider()
 
+        # FORMULARIO FUNCIONAL DENTRO DEL EXPANDER DEL DASHBOARD
         with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Aporte Inicial)", expanded=False):
-            with st.form("form_aporte_rapido", clear_on_submit=True):
+            with st.form("form_aporte_rapido_dashboard", clear_on_submit=True):
                 col_monto, col_obs = st.columns([1, 2])
                 with col_monto:
                     monto_aporte = st.number_input("Monto ($)", min_value=1.0, step=1000.0, format="%.2f", value=100000.0)
