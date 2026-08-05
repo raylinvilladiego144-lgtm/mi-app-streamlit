@@ -26,14 +26,16 @@ class PrestamoRepository:
         capital: float | Decimal = 0.0,
         tasa_interes: float | Decimal = 0.0,
         num_cuotas: int = 1,
+        plazo_dias: int | None = None,
         frecuencia: str = "FIJO",
         fecha_inicio=None,
         observaciones: str = "",
         usuario: str = "admin",
+        **kwargs  # Captura cualquier otro argumento adicional inesperado para evitar errores de tipo
     ) -> Prestamo:
         """
         Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente.
-        Soporta tanto 'cliente_id' directo como 'cliente_nombre' para mantener compatibilidad total.
+        Soporta 'cliente_id', 'plazo_dias' y **kwargs para máxima compatibilidad con cualquier vista.
         """
         cliente_obj = None
 
@@ -62,7 +64,12 @@ class PrestamoRepository:
 
         cap_dec = Decimal(str(capital or 0.0))
         tasa_dec = Decimal(str(tasa_interes or 0.0)) / Decimal("100")
-        cuotas_totales = int(num_cuotas or 1)
+        
+        # Compatibilidad: Si pasan plazo_dias, usarlo como número de cuotas o calcular
+        if plazo_dias is not None and plazo_dias > 0:
+            cuotas_totales = int(plazo_dias)
+        else:
+            cuotas_totales = int(num_cuotas or 1)
 
         # Validación opcional: Verificar si ya tiene un préstamo activo exactamente igual
         prestamo_existente = self.db.query(Prestamo).filter(
