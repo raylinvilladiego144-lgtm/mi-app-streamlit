@@ -38,6 +38,9 @@ class PrestamoRepository:
         Crea un nuevo préstamo, genera sus cuotas, descuenta de la caja del usuario actual
         y registra el evento financiero de forma automática para cualquier administrador.
         """
+        # Normalizamos el usuario recibido para asegurar compatibilidad de multi-tenancy
+        current_user = str(usuario or "admin").strip().lower()
+        
         cliente_obj = None
 
         if cliente_id is not None:
@@ -56,7 +59,7 @@ class PrestamoRepository:
                     documento="S/D",
                     telefono="S/D",
                     direccion="S/D",
-                    usuario=str(usuario or "admin")
+                    usuario=current_user
                 )
                 self.db.add(cliente_obj)
                 self.db.flush()
@@ -103,8 +106,7 @@ class PrestamoRepository:
 
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
-        # Asignar el usuario actual al préstamo creado
-        current_user = str(usuario or "admin")
+        # Asignar el usuario actual al préstamo creado de forma explícita
         nuevo_prestamo = Prestamo(
             cliente_id=cliente_obj.id,
             usuario=current_user,
