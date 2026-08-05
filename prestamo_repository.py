@@ -1,7 +1,7 @@
 """
 prestamo_repository.py
 Repositorio con validación para evitar duplicar préstamos idénticos al mismo cliente 
-y motor de recálculo por temporalidad y vencimiento mensual, conectado al servicio de eventos.
+y motor de recálculo por temporalidad y vencimiento mensual, con desembolso automático en caja.
 """
 
 from datetime import datetime, timedelta
@@ -32,19 +32,17 @@ class PrestamoRepository:
         fecha_inicio=None,
         observaciones: str = "",
         usuario: str = "admin",
-        **kwargs  # Captura cualquier otro argumento adicional inesperado para evitar errores de tipo
+        **kwargs
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo validando que no exista uno idéntico activo para el cliente,
-        descuenta de caja y registra el evento financiero para alimentar el dashboard correctamente.
+        Crea un nuevo préstamo, genera sus cuotas, descuenta de la caja del usuario actual
+        y registra el evento financiero de forma automática para cualquier administrador.
         """
         cliente_obj = None
 
-        # 1. Si se proporciona cliente_id, buscar directamente por ID
         if cliente_id is not None:
             cliente_obj = self.db.query(Cliente).filter(Cliente.id == cliente_id).first()
 
-        # 2. Si no se encontró por ID o se envió cliente_nombre, resolver por nombre
         if not cliente_obj:
             if not cliente_nombre:
                 raise ValueError("Error: Debes ingresar un ID de cliente válido o el nombre completo del cliente.")
@@ -67,13 +65,11 @@ class PrestamoRepository:
         tasa_porcentaje = Decimal(str(tasa_interes or 0.0))
         tasa_dec = tasa_porcentaje / Decimal("100")
         
-        # Compatibilidad: Si pasan plazo_dias, usarlo como número de cuotas o calcular
         if plazo_dias is not None and plazo_dias > 0:
             cuotas_totales = int(plazo_dias)
         else:
             cuotas_totales = int(num_cuotas or 1)
 
-        # Validación opcional: Verificar si ya tiene un préstamo activo exactamente igual
         prestamo_existente = self.db.query(Prestamo).filter(
             Prestamo.cliente_id == cliente_obj.id,
             Prestamo.capital == cap_dec,
@@ -82,7 +78,7 @@ class PrestamoRepository:
         ).first()
 
         if prestamo_existente:
-            return prestamo_existente  # Retorna el existente en lugar de duplicarlo
+            return prestamo_existente
 
         if fecha_inicio is None:
             fecha_inicio = datetime.now().date()
@@ -107,9 +103,11 @@ class PrestamoRepository:
 
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
+        # Asignar el usuario actual al préstamo creado
+        current_user = str(usuario or "admin")
         nuevo_prestamo = Prestamo(
             cliente_id=cliente_obj.id,
-            usuario=str(usuario or "admin"),
+            usuario=current_user,
             capital=cap_dec,
             porcentaje_interes=tasa_porcentaje,
             monto_interes=monto_interes,
@@ -139,12 +137,12 @@ class PrestamoRepository:
             )
             self.db.add(nueva_cuota)
 
-        # 3. Integración con Caja y Dashboard (Desembolso y Registro de Evento)
-        caja_service = CajaService(self.db, usuario_actual=str(usuario or "admin"))
+        # --- CONEXIÓN AUTOMÁTICA CON CAJA Y DASHBOARD ---
+        caja_service = CajaService(self.db, usuario_actual=current_user)
         obs_caja = f"Desembolso por Crédito Otorgado a {cliente_obj.nombre_completo} (Préstamo #{nuevo_prestamo.id})"
         
         movimiento_registrado = False
-        for metodo_caja in ["registrar_egreso", "registrar_retiro", "egresar", "retirar"]:
+        for metodo_caja in ["registrar_egreso", "registrar_retiro", "egresar", "retirar", "registrar_movimiento"]:
             if hasattr(caja_service, metodo_caja):
                 try:
                     fn = getattr(caja_service, metodo_caja)
@@ -162,17 +160,17 @@ class PrestamoRepository:
 
         if not movimiento_registrado and hasattr(caja_service, "caja") and caja_service.caja:
             if hasattr(caja_service.caja, "saldo_disponible"):
-                caja_service.caja.saldo_disponible -= cap_dec
+                caja_service.caja.saldo_disponible = (caja_service.caja.saldo_disponible or Decimal("0.00")) - cap_dec
                 self.db.add(caja_service.caja)
 
-        # Registrar de forma segura el EventoFinanciero para que el dashboard lo muestre en "Últimos Movimientos"
+        # Registrar el evento financiero para el feed del Dashboard
         try:
             from app.models.evento import EventoFinanciero, TipoEvento
             evento = EventoFinanciero(
                 tipo_evento=TipoEvento.DESEMBOLSO if hasattr(TipoEvento, "DESEMBOLSO") else "DESEMBOLSO",
                 monto=cap_dec,
                 observacion=obs_caja,
-                usuario=str(usuario or "admin"),
+                usuario=current_user,
                 creado_en=datetime.now()
             )
             self.db.add(evento)
@@ -184,9 +182,6 @@ class PrestamoRepository:
         return nuevo_prestamo
 
     def listar_ultimos_eventos(self, limite: int = 8):
-        """
-        Retorna los últimos eventos financieros registrados para el dashboard.
-        """
         try:
             from app.models.evento import EventoFinanciero
             return self.db.query(EventoFinanciero).order_by(EventoFinanciero.creado_en.desc()).limit(limite).all()
@@ -194,12 +189,6 @@ class PrestamoRepository:
             return []
 
     def evaluar_y_recalcular_temporalidad_mensual(self, usuario: str = None):
-        """
-        Motor de temporalidad: Recorre los préstamos activos y verifica si cuotas pendientes
-        han cruzado fuera del rango del mes en curso (comparando año/mes de fecha_pago_esperada 
-        con la fecha actual). Si están vencidas fuera del rango mensual, se les recalcula 
-        el interés pendiente aplicando el mismo porcentaje original pactado.
-        """
         query = self.db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO)
         if usuario:
             query = query.filter(Prestamo.usuario == usuario)
