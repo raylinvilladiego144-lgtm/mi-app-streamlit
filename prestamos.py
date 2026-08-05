@@ -14,7 +14,8 @@ import streamlit as st
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
-from prestamo import Cuota, EstadoCuota, EstadoPrestamo
+from prestamo import Cuota, EstadoCuota, EstadoPrestamo, EventoFinanciero
+from prestamo_service import PrestamoService
 
 # ReportLab para generación de PDFs
 from reportlab.lib.pagesizes import letter
@@ -24,7 +25,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 
-def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
+def generar_pdf_paz_y_salvo(cliente_nombre: str, cliente_documento: str, prestamo_id: int, capital: float, interes: float, monto_total: float, fecha_inicio: str, fecha_vencimiento: str, cuotas_data: list, estado: str) -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -41,7 +42,7 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
     titulo_estilo = ParagraphStyle(
         'TituloPazSalvo',
         parent=styles['Heading1'],
-        fontSize=20,
+        fontSize=18,
         alignment=1,  # Centrado
         textColor=colors.HexColor('#1B365D')
     )
@@ -49,37 +50,69 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
     body_estilo = ParagraphStyle(
         'BodyPazSalvo',
         parent=styles['Normal'],
-        fontSize=12,
-        leading=18,
+        fontSize=11,
+        leading=16,
         alignment=4  # Justificado
     )
 
     elementos.append(Paragraph("CERTIFICADO DE PAZ Y SALVO", titulo_estilo))
-    elementos.append(Spacer(1, 20))
+    elementos.append(Spacer(1, 15))
     
     texto_certificacion = f"""
     A quien pueda interesar:<br/><br/>
-    Por medio de la presente se certifica que el/la cliente <b>{cliente_nombre}</b> 
-    se encuentra a <b>PAZ Y SALVO</b> por todo concepto relacionado con el crédito o 
-    préstamo registrado bajo el identificador interno <b>N° {prestamo_id}</b>.<br/><br/>
-    El presente documento se expide a solicitud de la parte interesada a los 
-    días del mes en curso, habiéndose verificado la cancelación total de los 
-    valores adeudados, capital e intereses correspondientes.
+    Por medio de la presente se certifica que el/la cliente <b>{cliente_nombre}</b>, identificado(a) con documento N° <b>{cliente_documento}</b>, 
+    se encuentra a <b>PAZ Y SALVO</b> por todo concepto relacionado con el crédito o préstamo registrado bajo el identificador interno <b>N° {prestamo_id}</b>.<br/><br/>
+    Detalles del crédito liquidado:<br/>
+    - <b>Capital:</b> ${capital:,.2f}<br/>
+    - <b>Interés:</b> ${interes:,.2f}<br/>
+    - <b>Monto Total:</b> ${monto_total:,.2f}<br/>
+    - <b>Fecha de Inicio:</b> {fecha_inicio}<br/>
+    - <b>Fecha de Vencimiento:</b> {fecha_vencimiento}<br/>
+    - <b>Estado Actual:</b> {estado}<br/><br/>
+    El presente documento se expide a solicitud de la parte interesada a los días del mes en curso, habiéndose verificado la cancelación total de los valores adeudados.
     """
     elementos.append(Paragraph(texto_certificacion, body_estilo))
-    elementos.append(Spacer(1, 40))
+    elementos.append(Spacer(1, 15))
+
+    elementos.append(Paragraph("<b>Resumen de Cuotas Pagadas:</b>", styles['Heading3']))
+    elementos.append(Spacer(1, 5))
+
+    # Tabla de cuotas para el PDF
+    tabla_cuotas_data = [["N° Cuota", "Monto", "Pagado", "Vesperada", "V. Real", "Estado"]]
+    for c in cuotas_data:
+        tabla_cuotas_data.append([
+            str(c.numero_cuota),
+            f"${float(c.monto_cuota):,.2f}",
+            f"${float(c.monto_pagado):,.2f}",
+            str(c.fecha_pago_esperada),
+            str(c.fecha_pago_real or "N/A"),
+            str(c.estado.value if hasattr(c.estado, 'value') else c.estado)
+        ])
+    
+    t_cuotas = Table(tabla_cuotas_data, colWidths=[60, 90, 90, 90, 90, 90])
+    t_cuotas.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1B365D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey)
+    ]))
+    elementos.append(t_cuotas)
+    elementos.append(Spacer(1, 30))
     
     # Tabla de firmas
     firma_data = [
         ["__________________________________", "__________________________________"],
-        ["Firma Autorizada / Gerencia", "Recibido Conforme (Cliente)"]
+        ["Firma Autorizada / Gerencia", f"Firma / Recibido Conforme ({cliente_nombre})"]
     ]
-    tabla_firmas = Table(firma_data, colWidths=[240, 240])
+    tabla_firmas = Table(firma_data, colWidths=[250, 250])
     tabla_firmas.setStyle(TableStyle([
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
     ]))
     
     elementos.append(tabla_firmas)
@@ -91,19 +124,18 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, prestamo_id: int) -> bytes:
 
 
 def render_prestamos(usuario_actual: str = "admin"):
-    # Normalización limpia de usuario para respetar sesiones
     current_user = str(usuario_actual or "admin").strip().lower()
 
     st.markdown("## 💳 Gestión de Préstamos y Cartera")
-    st.caption("Control de créditos activos, visualización de cuotas, simulaciones financieras y emisión de paz y salvos")
+    st.caption("Control de créditos activos, visualización de cuotas, simulaciones financieras, refinanciación y emisión de paz y salvos")
 
     db = SessionLocal()
 
     try:
         prestamo_repo = PrestamoRepository(db)
         cliente_repo = ClienteRepository(db)
+        prestamo_service = PrestamoService(db)
 
-        # Listar respetando la sesión actual del usuario o administrador
         clientes = cliente_repo.listar_todos()
         prestamos_activos = prestamo_repo.obtener_por_usuario(current_user) if current_user != "admin" else prestamo_repo.listar_activos()
 
@@ -124,25 +156,24 @@ def render_prestamos(usuario_actual: str = "admin"):
             else:
                 clientes_dict = {f"{c.nombre_completo} (ID: {c.id})": c for c in clientes if hasattr(c, "nombre_completo")}
                 
-                with st.form("form_nuevo_prestamo", clear_on_submit=True):
-                    cliente_seleccionado_str = st.selectbox("Seleccionar Cliente *", options=list(clientes_dict.keys()))
+                with st.form("form_nuevo_prestamo_unico", clear_on_submit=True):
+                    cliente_seleccionado_str = st.selectbox("Seleccionar Cliente *", options=list(clientes_dict.keys()), key="sel_cli_nuevo_prestamo")
                     
                     col_p1, col_p2 = st.columns(2)
                     with col_p1:
-                        capital = st.number_input("Capital a Prestar ($) *", min_value=10.0, step=100.0, format="%.2f")
-                        tasa_interes = st.number_input("Tasa de Interés (%) *", min_value=0.0, step=0.5, format="%.2f")
+                        capital = st.number_input("Capital a Prestar ($) *", min_value=10.0, step=100.0, format="%.2f", key="input_cap_nuevo")
+                        tasa_interes = st.number_input("Tasa de Interés (%) *", min_value=0.0, step=0.5, format="%.2f", key="input_tasa_nuevo")
                     with col_p2:
-                        numero_cuotas = st.number_input("Número de Cuotas *", min_value=1, step=1, value=1)
-                        plazo_dias = st.number_input("Plazo Total en Días *", min_value=1, step=1, value=30)
+                        numero_cuotas = st.number_input("Número de Cuotas *", min_value=1, step=1, value=1, key="input_cuotas_nuevo")
+                        plazo_dias = st.number_input("Plazo Total en Días *", min_value=1, step=1, value=30, key="input_plazo_nuevo")
                         
-                    observacion = st.text_area("Observaciones o Destino del Préstamo", placeholder="Ej. Capital de trabajo para mercancía")
+                    observacion = st.text_area("Observaciones o Destino del Préstamo", placeholder="Ej. Capital de trabajo para mercancía", key="input_obs_nuevo")
                     
                     btn_crear = st.form_submit_button("Crear Préstamo", type="primary", use_container_width=True)
                     
                     if btn_crear:
                         cliente_obj = clientes_dict[cliente_seleccionado_str]
                         try:
-                            # Pasamos explícitamente el usuario actual para ligar la caja y el crédito
                             prestamo_repo.crear_prestamo(
                                 cliente_id=cliente_obj.id,
                                 capital=Decimal(str(capital)),
@@ -164,120 +195,167 @@ def render_prestamos(usuario_actual: str = "admin"):
             st.subheader("Listado de Préstamos Vigentes y Cuotas")
             
             if not prestamos_activos:
-                st.info("ℹ️ No hay préstamos activos registrados para este usuario.")
+                st.info("ℹ️ No hay préstamos vigentes registrados para este usuario.")
             else:
                 for p in prestamos_activos:
                     nombre_cli = "Cliente General"
+                    doc_cli = "N/A"
                     for c in clientes:
                         if c.id == p.cliente_id:
                             nombre_cli = c.nombre_completo
+                            doc_cli = getattr(c, 'documento', 'N/A')
                             break
 
-                    with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} — {nombre_cli} | Capital: ${getattr(p, 'capital', 0.0):,.2f}"):
-                        c_info1, c_info2 = st.columns(2)
+                    estado_val = getattr(p, 'estado', 'ACTIVO')
+                    estado_str = estado_val.value if hasattr(estado_val, 'value') else str(estado_val)
+
+                    with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} — {nombre_cli} | Capital: ${getattr(p, 'capital', 0.0):,.2f} | Estado: {estado_str}"):
+                        
+                        # CORRECCIÓN 2 & 3 & 4: Información completa del préstamo
+                        c_info1, c_info2, c_info3 = st.columns(3)
                         with c_info1:
-                            st.write(f"**Capital Inicial:** ${getattr(p, 'capital', 0.0):,.2f}")
+                            st.write(f"**Capital:** ${getattr(p, 'capital', 0.0):,.2f}")
                             tasa_val = getattr(p, 'porcentaje_interes', None) if getattr(p, 'porcentaje_interes', None) is not None else getattr(p, 'tasa_interes', 0.0)
-                            st.write(f"**Tasa de Interés:** {tasa_val}%")
+                            st.write(f"**Interés:** {tasa_val}%")
+                            st.write(f"**Monto Total:** ${getattr(p, 'monto_total', 0.0):,.2f}")
                         with c_info2:
-                            plazo_val = getattr(p, 'numero_cuotas', None) if getattr(p, 'numero_cuotas', None) is not None else getattr(p, 'plazo_dias', 0)
-                            st.write(f"**Plazo / Cuotas:** {plazo_val}")
-                            estado_val = getattr(p, 'estado', 'ACTIVO')
-                            estado_str = estado_val.value if hasattr(estado_val, 'value') else str(estado_val)
+                            st.write(f"**Fecha Adquisición:** {getattr(p, 'fecha_inicio', 'N/A')}")
+                            st.write(f"**Fecha Vencimiento:** {getattr(p, 'fecha_vencimiento', 'N/A')}")
+                            st.write(f"**Número de Cuotas:** {getattr(p, 'numero_cuotas', 'N/A')}")
+                        with c_info3:
+                            st.write(f"**Saldo Pendiente:** ${getattr(p, 'saldo_pendiente', 0.0):,.2f}")
+                            st.write(f"**N° Refinanciaciones:** {getattr(p, 'numero_refinanciaciones', 0)}")
                             st.write(f"Estado: **{estado_str}**")
 
                         st.markdown("---")
-                        st.markdown("### 📊 Tabla de Cuotas y Control de Saldo")
+                        st.markdown("### 📊 Tabla de Cuotas")
 
-                        # Obtener cuotas asociadas al préstamo actual ordenadas por número de cuota
                         cuotas_prestamo = db.query(Cuota).filter(Cuota.prestamo_id == p.id).order_by(Cuota.numero_cuota).all()
 
                         if not cuotas_prestamo:
                             st.warning("⚠️ Este préstamo no tiene cuotas generadas en el sistema.")
                         else:
-                            # Renderizar tabla visual de cuotas
+                            # CORRECCIÓN 5: Tabla de cuotas mejorada con fecha esperada, real y saldo de cuota
                             datos_cuotas = []
                             for cuota in cuotas_prestamo:
-                                saldo_pend = cuota.monto_cuota - cuota.monto_pagado
+                                saldo_c = getattr(cuota, 'saldo_cuota', cuota.monto_cuota - cuota.monto_pagado)
                                 estado_cuota_str = cuota.estado.value if hasattr(cuota.estado, 'value') else str(cuota.estado)
                                 datos_cuotas.append({
-                                    "N° Cuota": cuota.numero_cuota,
-                                    "Monto Cuota ($)": float(cuota.monto_cuota),
+                                    "Número": cuota.numero_cuota,
+                                    "Monto ($)": float(cuota.monto_cuota),
                                     "Pagado ($)": float(cuota.monto_pagado),
-                                    "Saldo Pendiente ($)": float(saldo_pend),
-                                    "Vencimiento": str(cuota.fecha_pago_esperada),
+                                    "Saldo Cuota ($)": float(saldo_c),
+                                    "Fecha esperada": str(cuota.fecha_pago_esperada),
+                                    "Fecha real de pago": str(cuota.fecha_pago_real or "Pendiente"),
                                     "Estado": estado_cuota_str
                                 })
                             
                             st.dataframe(datos_cuotas, use_container_width=True)
 
-                            # 💡 Formulario de entrada de abono con segmentación inteligente
-                            st.markdown("#### 💰 Registrar Abono / Pago Inteligente")
-                            st.caption("El sistema distribuirá automáticamente el abono cubriendo las cuotas pendientes en orden cronológico.")
+                            # CORRECCIÓN 7: El Pago Inteligente usando Servicio
+                            st.markdown("#### 💰 Pago Inteligente")
+                            st.caption("Distribución automática cubriendo cuotas pendientes en orden cronológico.")
 
-                            with st.form(key=f"form_abono_{p.id}"):
-                                col_val, col_btn = st.columns([2, 1])
-                                with col_val:
-                                    valor_abono = st.number_input(
-                                        f"Valor del Abono ($) [Préstamo #{p.id}]",
-                                        min_value=1.0,
-                                        step=10.0,
-                                        format="%.2f",
-                                        key=f"input_abono_{p.id}"
-                                    )
-                                with col_btn:
-                                    st.text("") # Espaciador
-                                    st.text("")
-                                    btn_procesar = st.form_submit_button("Aplicar Abono", type="primary", use_container_width=True)
+                            with st.form(key=f"form_pago_inteligente_{p.id}"):
+                                valor_abono = st.number_input(
+                                    f"Valor del Abono ($) [Préstamo #{p.id}]",
+                                    min_value=1.0,
+                                    step=10.0,
+                                    format="%.2f",
+                                    key=f"input_pago_inteligente_{p.id}"
+                                )
+                                btn_procesar_pago = st.form_submit_button("Aplicar Pago Inteligente", type="primary", use_container_width=True)
 
-                                if btn_procesar:
-                                    monto_restante = Decimal(str(valor_abono))
-                                    
-                                    # Motor inteligente de distribución de pagos por cuota
-                                    for cuota in cuotas_prestamo:
-                                        if monto_restante <= 0:
-                                            break
-                                        
-                                        saldo_pendiente = cuota.monto_cuota - cuota.monto_pagado
-                                        if saldo_pendiente <= 0:
-                                            continue  # Cuota ya pagada
-                                        
-                                        if monto_restante >= saldo_pendiente:
-                                            monto_restante -= saldo_pendiente
-                                            cuota.monto_pagado = cuota.monto_cuota
-                                            cuota.estado = EstadoCuota.PAGADA
-                                            cuota.fecha_pago_real = date.today()
-                                        else:
-                                            cuota.monto_pagado += monto_restante
-                                            cuota.estado = EstadoCuota.PARCIAL
-                                            cuota.fecha_pago_real = date.today()
-                                            monto_restante = Decimal("0.00")
-
-                                    db.commit()
-
-                                    # Validar si todas las cuotas quedaron pagadas para liquidar el préstamo automáticamente
-                                    cuotas_verificacion = db.query(Cuota).filter(Cuota.prestamo_id == p.id).all()
-                                    if all(c.estado == EstadoCuota.PAGADA for c in cuotas_verificacion):
-                                        p.estado = EstadoPrestamo.LIQUIDADO
-                                        db.commit()
-                                        st.success(f"🎯 ¡Todas las cuotas cubiertas! El Préstamo #{p.id} ha sido marcado como **LIQUIDADO**.")
-                                    else:
-                                        st.success("✅ Abono aplicado e integrado correctamente sobre las cuotas pendientes.")
-                                    
-                                    st.rerun()
+                                if btn_procesar_pago:
+                                    try:
+                                        prestamo_service.registrar_pago_inteligente(
+                                            prestamo_id=p.id,
+                                            monto_pago=Decimal(str(valor_abono)),
+                                            usuario=current_user
+                                        )
+                                        st.success("✅ Pago inteligente aplicado y registrado correctamente.")
+                                        st.rerun()
+                                    except Exception as err:
+                                        st.error(f"❌ Error al procesar el pago: {err}")
 
                         st.divider()
 
-                        # Botón persistente para descargar Paz y Salvo
-                        pdf_data = generar_pdf_paz_y_salvo(nombre_cli, p.id)
-                        st.download_button(
-                            label=f"📥 Descargar PDF de Paz y Salvo (Préstamo #{p.id})",
-                            data=pdf_data,
-                            file_name=f"paz_y_salvo_prestamo_{p.id}.pdf",
-                            mime="application/pdf",
-                            key=f"download_{p.id}",
-                            use_container_width=True
-                        )
+                        # CORRECCIÓN 8: Agregar refinanciación debajo del Pago Inteligente
+                        st.markdown("#### 🔄 Refinanciación de Préstamo")
+                        with st.form(key=f"form_refinanciacion_{p.id}"):
+                            desea_refinanciar = st.selectbox("¿Desea refinanciar?", options=["No", "Sí"], key=f"sel_refinanciar_{p.id}")
+                            
+                            nueva_tasa = st.number_input("Nueva tasa (%)", min_value=0.0, value=float(tasa_val), step=0.5, key=f"ref_tasa_{p.id}")
+                            nuevo_plazo = st.number_input("Nuevo plazo en días", min_value=1, value=30, step=1, key=f"ref_plazo_{p.id}")
+                            nueva_fecha = st.date_input("Nueva fecha de vencimiento", value=date.today(), key=f"ref_fecha_{p.id}")
+                            observacion_ref = st.text_area("Observación de refinanciación", key=f"ref_obs_{p.id}")
+                            
+                            btn_refinanciar = st.form_submit_button("Procesar Refinanciación", use_container_width=True)
+
+                            if btn_refinanciar:
+                                if desea_refinanciar == "Sí":
+                                    try:
+                                        prestamo_service.refinanciar_prestamo(
+                                            prestamo_id=p.id,
+                                            nueva_tasa=Decimal(str(nueva_tasa)),
+                                            nuevo_plazo=int(nuevo_plazo),
+                                            nueva_fecha_vencimiento=nueva_fecha,
+                                            observacion=observacion_ref,
+                                            usuario=current_user
+                                        )
+                                        st.success("🎉 Préstamo refinanciado con éxito.")
+                                        st.rerun()
+                                    except Exception as ex_ref:
+                                        st.error(f"❌ Error al refinanciar: {ex_ref}")
+                                else:
+                                    st.info("ℹ️ Seleccione 'Sí' para proceder con la refinanciación.")
+
+                        st.divider()
+
+                        # CORRECCIÓN 6: Historial del préstamo debajo de la tabla y refinanciación
+                        st.markdown("#### 📜 Historial del Préstamo")
+                        eventos_prestamo = db.query(EventoFinanciero).filter(EventoFinanciero.prestamo_id == p.id).all()
+                        if not eventos_prestamo:
+                            st.info("ℹ️ No hay eventos financieros registrados para este préstamo.")
+                        else:
+                            datos_eventos = []
+                            for ev in eventos_prestamo:
+                                datos_eventos.append({
+                                    "Fecha": str(ev.fecha),
+                                    "Tipo": getattr(ev, 'tipo', 'TRANSACCIÓN'),
+                                    "Monto ($)": float(getattr(ev, 'monto', 0.0)),
+                                    "Usuario": getattr(ev, 'usuario', current_user),
+                                    "Observación": getattr(ev, 'observacion', '')
+                                })
+                            st.dataframe(datos_eventos, use_container_width=True)
+
+                        st.divider()
+
+                        # CORRECCIÓN 9: Paz y Salvo aparece únicamente cuando EstadoPrestamo.LIQUIDADO
+                        if estado_val == EstadoPrestamo.LIQUIDADO or estado_str.upper() == "LIQUIDADO":
+                            st.success("🎯 Este crédito se encuentra **LIQUIDADO**. Puede descargar su Paz y Salvo:")
+                            pdf_data = generar_pdf_paz_y_salvo(
+                                cliente_nombre=nombre_cli,
+                                cliente_documento=doc_cli,
+                                prestamo_id=p.id,
+                                capital=float(getattr(p, 'capital', 0.0)),
+                                interes=float(getattr(p, 'monto_total', 0.0) - getattr(p, 'capital', 0.0)),
+                                monto_total=float(getattr(p, 'monto_total', 0.0)),
+                                fecha_inicio=str(getattr(p, 'fecha_inicio', '')),
+                                fecha_vencimiento=str(getattr(p, 'fecha_vencimiento', '')),
+                                cuotas_data=cuotas_prestamo,
+                                estado=estado_str
+                            )
+                            st.download_button(
+                                label=f"📥 Descargar PDF de Paz y Salvo (Préstamo #{p.id})",
+                                data=pdf_data,
+                                file_name=f"paz_y_salvo_prestamo_{p.id}.pdf",
+                                mime="application/pdf",
+                                key=f"download_paz_salvo_{p.id}",
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("ℹ️ El certificado de Paz y Salvo estará disponible una vez el préstamo sea totalmente liquidado.")
 
         # ==========================================
         # TAB 3: SIMULADOR FINANCIERO
@@ -287,10 +365,10 @@ def render_prestamos(usuario_actual: str = "admin"):
             
             s_col1, s_col2 = st.columns(2)
             with s_col1:
-                cap_sim_input = st.number_input("Capital a simular ($)", min_value=10.0, value=1000.0, step=100.0)
-                tasa_sim_input = st.number_input("Tasa estimada (%)", min_value=0.0, value=10.0, step=0.5)
+                cap_sim_input = st.number_input("Capital a simular ($)", min_value=10.0, value=1000.0, step=100.0, key="sim_cap_input")
+                tasa_sim_input = st.number_input("Tasa estimada (%)", min_value=0.0, value=10.0, step=0.5, key="sim_tasa_input")
             with s_col2:
-                plazo_sim_input = st.number_input("Plazo en días", min_value=1, value=30, step=1)
+                plazo_sim_input = st.number_input("Plazo en días", min_value=1, value=30, step=1, key="sim_plazo_input")
                 
             cap_sim = Decimal(str(cap_sim_input))
             tasa_sim = Decimal(str(tasa_sim_input)) / Decimal("100")
