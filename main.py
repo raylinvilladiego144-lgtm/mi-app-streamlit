@@ -163,7 +163,7 @@ class RepositorioFinanciero:
         return True
 
 
-# --- MÓDULO 1: DASHBOARD / CAJA (Con registro funcional integrado directamente) ---
+# --- MÓDULO 1: DASHBOARD / CAJA (CORRECCIÓN 1: Formulario duplicado eliminado) ---
 def render_dashboard(usuario):
     current_user = str(usuario or "admin").strip().lower()
 
@@ -206,36 +206,6 @@ def render_dashboard(usuario):
             st.metric("🚫 Bloqueados", clientes_bloqueados)
         with c4:
             st.metric("📄 Préstamos Activos", len(prestamos_activos))
-
-        st.divider()
-
-        # FORMULARIO FUNCIONAL DENTRO DEL EXPANDER DEL DASHBOARD
-        with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Aporte Inicial)", expanded=False):
-            with st.form("form_aporte_rapido_dashboard", clear_on_submit=True):
-                col_monto, col_obs = st.columns([1, 2])
-                with col_monto:
-                    monto_aporte = st.number_input("Monto ($)", min_value=1.0, step=1000.0, format="%.2f", value=100000.0)
-                with col_obs:
-                    obs_aporte = st.text_input("Descripción / Motivo", value="Aporte inicial de capital o base en caja")
-                
-                btn_guardar_aporte = st.form_submit_button("Registrar Ingreso en Caja", type="primary", use_container_width=True)
-                if btn_guardar_aporte:
-                    try:
-                        monto_dec = Decimal(str(monto_aporte))
-                        if hasattr(caja_service, "registrar_aporte"):
-                            caja_service.registrar_aporte(monto_dec, obs_aporte)
-                        elif hasattr(caja_service, "registrar_ingreso"):
-                            caja_service.registrar_ingreso(monto_dec, obs_aporte)
-                        else:
-                            if hasattr(caja_service, "caja") and caja_service.caja:
-                                caja_service.caja.saldo_disponible += monto_dec
-                                db.add(caja_service.caja)
-                                db.commit()
-                        st.success("✅ ¡Ingreso registrado con éxito en tu caja!")
-                        st.rerun()
-                    except Exception as e:
-                        db.rollback()
-                        st.error(f"❌ Error al registrar el movimiento: {e}")
 
         st.divider()
 
@@ -297,7 +267,7 @@ def render_pagos(usuario):
                         monto_abono=monto_abono, 
                         usuario=usuario
                     )
-                    st.success(f"¡Abono de ${monto_abono:,.2f} aplicado con éxito a la(s) cuota(s) #{', '.join(map(str, cuotas_afectadas))}!")
+                    st.success(f"¡Abono de ${monto_abono:,.2f} aplicado con éxito al préstamo #{prestamo_seleccionado.id}!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error al registrar el abono en la base de datos: {e}")
@@ -396,7 +366,7 @@ def render_pagos(usuario):
         db.close()
 
 
-# --- MÓDULO 3: CLIENTES (Con Abono y Refinanciación debajo mediante diagrama de decisión Sí/No) ---
+# --- MÓDULO 3: CLIENTES ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
     st.markdown("Gestión de directorio, control de abonos por cliente y opciones de refinanciación integradas.")
@@ -407,7 +377,7 @@ def render_clientes(usuario):
         
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
-                nombre = st.text_input("Nombre completo *")
+                nombre = st.text_input("Nombre completo *", key="input_nuevo_cliente_nombre_main")
                 
                 submitted = st.form_submit_button("Guardar Cliente", type="primary")
                 if submitted:
@@ -465,7 +435,7 @@ def render_clientes(usuario):
                                 except Exception as e:
                                     st.error(f"❌ Error al aplicar abono: {e}")
 
-                        # 2. SECCIÓN DE REFINANCIACIÓN (UBICADA EXACTAMENTE DEBAJO DEL ABONO)
+                        # 2. SECCIÓN DE REFINANCIACIÓN
                         st.markdown("### 🔄 Opción de Refinanciación")
                         st.caption("Diagrama de decisión: ¿Desea refinanciar este crédito?")
                         
@@ -479,8 +449,8 @@ def render_clientes(usuario):
                         if refinar_decision == "Sí":
                             st.info("Proceso de refinanciación activado. Ingrese los nuevos términos estructurales:")
                             with st.form(f"form_refinanciar_{p.id}"):
-                                nuevo_plazo = st.number_input("Nuevo Plazo (Número de cuotas)", min_value=1, value=12, step=1)
-                                nueva_tasa = st.number_input("Nueva Tasa / Ajuste (%)", min_value=0.0, value=0.0)
+                                nuevo_plazo = st.number_input("Nuevo Plazo (Número de cuotas)", min_value=1, value=12, step=1, key=f"cli_ref_plazo_{p.id}")
+                                nueva_tasa = st.number_input("Nueva Tasa / Ajuste (%)", min_value=0.0, value=0.0, key=f"cli_ref_tasa_{p.id}")
                                 btn_ref = st.form_submit_button("Ejecutar Refinanciación", type="primary")
 
                                 if btn_ref:
@@ -603,8 +573,8 @@ def login():
         st.caption("Sistema de Gestión de Préstamos e Inversiones")
 
         with st.form("form_login"):
-            usr = st.text_input("Usuario").strip().lower()
-            pwd = st.text_input("Contraseña", type="password")
+            usr = st.text_input("Usuario", key="input_login_usuario").strip().lower()
+            pwd = st.text_input("Contraseña", type="password", key="input_login_password")
             btn = st.form_submit_button("Ingresar", type="primary", use_container_width=True)
 
             if btn:
@@ -650,7 +620,7 @@ def main():
     if modulo == "Dashboard / Caja":
         render_dashboard(usuario_actual)
     elif modulo == "Préstamos":
-        render_prestamos()
+        render_prestamos(usuario_actual)
     elif modulo == "Pagos":
         render_pagos(usuario_actual)
     elif modulo == "Clientes":
