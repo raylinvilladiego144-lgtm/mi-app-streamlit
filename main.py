@@ -266,7 +266,7 @@ def render_pagos(usuario):
                         prestamo_id=prestamo_seleccionado.id, 
                         monto_abono=monto_abono, 
                         usuario=usuario
-                    ]
+                    )
                     st.success(f"¡Abono de ${monto_abono:,.2f} aplicado con éxito a la(s) cuota(s) #{', '.join(map(str, cuotas_afectadas))}!")
                     st.rerun()
                 except Exception as e:
