@@ -32,7 +32,7 @@ init_db()
 USUARIOS = {
     "simon": "12345",
     "raylin": "12345*",
-    "luis": "12345",
+    "luis": "123456",
 }
 
 
