@@ -20,7 +20,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.orm import relationship
-
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Enum as SQLEnum
 from base import Base
 
 
