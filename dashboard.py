@@ -1,10 +1,12 @@
 """
 app/pages/dashboard.py
 
-Pantalla principal de indicadores clave y lista de últimos movimientos.
+Pantalla principal de indicadores clave y lista de últimos movimientos,
+totalmente sincronizada con la sesión activa del usuario y control de caja.
 """
 
 import streamlit as st
+from decimal import Decimal
 
 from app.database.database import SessionLocal
 from app.services.caja_service import CajaService
@@ -16,8 +18,8 @@ def render_dashboard(usuario_actual: str = "admin"):
     # Normalización limpia del usuario actual para respetar las sesiones del sistema
     current_user = str(usuario_actual or "admin").strip().lower()
 
-    st.markdown("## 📊 Dashboard General")
-    st.caption("Resumen en tiempo real del estado financiero y de cartera")
+    st.markdown(f"## 📊 Dashboard Financiero — {usuario_actual.capitalize()}")
+    st.caption("Resumen en tiempo real del estado de caja, capital en la calle y flujos de efectivo.")
 
     db = SessionLocal()
 
@@ -27,23 +29,24 @@ def render_dashboard(usuario_actual: str = "admin"):
         cliente_repo = ClienteRepository(db)
         prestamo_repo = PrestamoRepository(db)
 
-        # Obtener información filtrada por la sesión actual si el sistema lo requiere
+        # Obtener información financiera y de cartera
         resumen = caja_service.obtener_resumen_financiero()
         clientes = cliente_repo.listar_todos()
         
         # Filtro de préstamos activos según el usuario activo o administrador global
         prestamos_activos = prestamo_repo.obtener_por_usuario(current_user) if current_user != "admin" else prestamo_repo.listar_activos()
         
-        # Validación segura para eventos recientes
+        # Validación segura para eventos recientes del usuario
         ultimos_eventos = []
-        if hasattr(prestamo_repo, "listar_ultimos_eventos"):
-            ultimos_eventos = prestamo_repo.listar_ultimos_eventos(limite=8)
-        else:
+        try:
             from app.models.evento import EventoFinanciero
             query_ev = db.query(EventoFinanciero)
             if current_user != "admin":
                 query_ev = query_ev.filter(EventoFinanciero.usuario == current_user)
             ultimos_eventos = query_ev.order_by(EventoFinanciero.creado_en.desc()).limit(8).all()
+        except Exception:
+            if hasattr(prestamo_repo, "listar_ultimos_eventos"):
+                ultimos_eventos = prestamo_repo.listar_ultimos_eventos(limite=8)
 
         total_clientes = len(clientes)
         clientes_activos = len(
@@ -63,21 +66,43 @@ def render_dashboard(usuario_actual: str = "admin"):
 
         with col1:
             st.metric(
-                "💵 Capital Disponible",
+                "💵 Caja Disponible",
                 f"${resumen.get('caja_disponible', 0.0):,.2f}"
             )
 
         with col2:
             st.metric(
-                "📈 Capital Prestado",
+                "📈 Capital Prestado (Activo)",
                 f"${resumen.get('capital_prestado', 0.0):,.2f}"
             )
 
         with col3:
             st.metric(
-                "🏦 Capital Total",
+                "🏦 Capital Total (Caja + Cartera)",
                 f"${resumen.get('capital_total', 0.0):,.2f}"
             )
+
+        st.divider()
+
+        # ==========================
+        # ACCIÓN RÁPIDA: APORTE / CAJA INICIAL
+        # ==========================
+        with st.expander("⚙️ Registrar Movimiento de Caja (Ingreso Genérico o Aporte Inicial)"):
+            with st.form("form_aporte_rapido", clear_on_submit=True):
+                col_monto, col_obs = st.columns([1, 2])
+                with col_monto:
+                    monto_aporte = st.number_input("Monto ($)", min_value=1.0, step=1000.0, format="%.2f")
+                with col_obs:
+                    obs_aporte = st.text_input("Descripción / Motivo", value="Aporte inicial de capital o base en caja")
+                
+                btn_guardar_aporte = st.form_submit_button("Registrar Ingreso en Caja", type="primary", use_container_width=True)
+                if btn_guardar_aporte:
+                    try:
+                        caja_service.registrar_aporte(Decimal(str(monto_aporte)), obs_aporte)
+                        st.success("✅ ¡Ingreso registrado con éxito en tu caja!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al registrar el movimiento: {e}")
 
         st.divider()
 
@@ -117,14 +142,14 @@ def render_dashboard(usuario_actual: str = "admin"):
         # ÚLTIMOS MOVIMIENTOS
         # ==========================
 
-        st.subheader("🕒 Últimos Movimientos")
+        st.subheader("🕒 Últimos Movimientos y Transacciones")
 
         if not ultimos_eventos:
-            st.info("No existen movimientos registrados para este usuario.")
+            st.info("ℹ️ No hay movimientos financieros registrados todavía en este usuario. Utiliza el panel superior para registrar tu capital base.")
 
         else:
             for evento in ultimos_eventos:
-                fecha_creacion = getattr(evento, "creado_en", None)
+                fecha_creacion = getattr(evento, "creado_en", None) or getattr(evento, "fecha", None)
                 fecha = fecha_creacion.strftime("%d/%m/%Y %H:%M") if fecha_creacion else "N/A"
 
                 monto_val = getattr(evento, "monto", 0.0)
@@ -138,12 +163,12 @@ def render_dashboard(usuario_actual: str = "admin"):
 
                     with col_ev1:
                         st.markdown(f"**{tipo_evento_str}**")
-                        st.caption(fecha)
+                        st.caption(f"Fecha: {fecha}")
 
                         observacion = getattr(evento, "observacion", "")
                         if observacion:
                             st.write(observacion)
-                            st.caption(f"Usuario: {getattr(evento, 'usuario', 'admin')}")
+                            st.caption(f"Usuario: {getattr(evento, 'usuario', current_user)}")
 
                     with col_ev2:
                         st.markdown(f"### {monto}")
