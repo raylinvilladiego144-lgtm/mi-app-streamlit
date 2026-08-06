@@ -10,7 +10,7 @@ from datetime import date
 import io
 import streamlit as st
 
-# Importaciones de la aplicación
+# Importaciones planas corregidas para la estructura de tu proyecto
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
@@ -133,6 +133,12 @@ def render_prestamos(usuario_actual: str = "admin"):
     db = SessionLocal()
 
     try:
+        # ⚡ Limpieza de sesión pendiente para evitar PendingRollbackError tras errores previos
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
         prestamo_repo = PrestamoRepository(db)
         cliente_repo = ClienteRepository(db)
         prestamo_service = PrestamoService(db)
@@ -187,6 +193,7 @@ def render_prestamos(usuario_actual: str = "admin"):
                             st.success("🎉 ¡Préstamo creado con éxito y registrado en caja!")
                             st.rerun()
                         except Exception as ex:
+                            db.rollback()
                             st.error(f"❌ Error al crear el préstamo: {ex}")
 
         # ==========================================
@@ -268,12 +275,13 @@ def render_prestamos(usuario_actual: str = "admin"):
                                     try:
                                         prestamo_service.registrar_pago_inteligente(
                                             prestamo_id=p.id,
-                                            monto_pagado=Decimal(str(valor_abono)),
-                                            usuario_actual=current_user
+                                            monto_pago=Decimal(str(valor_abono)),
+                                            usuario=current_user
                                         )
                                         st.success("✅ Pago inteligente aplicado y registrado correctamente.")
                                         st.rerun()
                                     except Exception as err:
+                                        db.rollback()
                                         st.error(f"❌ Error al procesar el pago: {err}")
 
                         st.divider()
@@ -284,8 +292,9 @@ def render_prestamos(usuario_actual: str = "admin"):
                             
                             nuevo_capital_ref = st.number_input("Nuevo Capital / Saldo Base ($)", min_value=0.0, value=float(getattr(p, 'capital', 0.0)), step=100.0, key=f"ref_capital_{p.id}")
                             nueva_tasa = st.number_input("Nueva tasa (%)", min_value=0.0, value=float(tasa_val), step=0.5, key=f"ref_tasa_{p.id}")
+                            nuevo_plazo = st.number_input("Nuevo plazo en días", min_value=1, value=30, step=1, key=f"ref_plazo_{p.id}")
                             nuevo_plazo_cuotas = st.number_input("Nuevo Número de Cuotas", min_value=1, value=int(getattr(p, 'numero_cuotas', 1)), step=1, key=f"ref_num_cuotas_{p.id}")
-                            nueva_fecha = st.date_input("Nueva fecha de vencimiento base", value=date.today(), key=f"ref_fecha_{p.id}")
+                            nueva_fecha = st.date_input("Nueva fecha de vencimiento", value=date.today(), key=f"ref_fecha_{p.id}")
                             observacion_ref = st.text_area("Observación de refinanciación", key=f"ref_obs_{p.id}")
                             
                             btn_refinanciar = st.form_submit_button("Procesar Refinanciación", use_container_width=True)
@@ -302,9 +311,10 @@ def render_prestamos(usuario_actual: str = "admin"):
                                             observacion=observacion_ref,
                                             usuario=current_user
                                         )
-                                        st.success("🎉 Préstamo refinanciado con éxito y caja actualizada.")
+                                        st.success("🎉 Préstamo refinanciado con éxito.")
                                         st.rerun()
                                     except Exception as ex_ref:
+                                        db.rollback()
                                         st.error(f"❌ Error al refinanciar: {ex_ref}")
                                 else:
                                     st.info("ℹ️ Seleccione 'Sí' para proceder con la refinanciación.")
@@ -319,7 +329,7 @@ def render_prestamos(usuario_actual: str = "admin"):
                             datos_eventos = []
                             for ev in eventos_prestamo:
                                 datos_eventos.append({
-                                    "Fecha": str(ev.fecha if hasattr(ev, 'fecha') else getattr(ev, 'creado_en', '')),
+                                    "Fecha": str(getattr(ev, 'fecha', getattr(ev, 'creado_en', ''))),
                                     "Tipo": getattr(ev, 'tipo_evento', getattr(ev, 'tipo', 'TRANSACCIÓN')),
                                     "Monto ($)": float(getattr(ev, 'monto', 0.0)),
                                     "Usuario": getattr(ev, 'usuario', current_user),
@@ -378,5 +388,8 @@ def render_prestamos(usuario_actual: str = "admin"):
             m2.metric("Total a Cobrar", f"${total_cobrar_sim:,.2f}")
             m3.metric("Cuota Referencial Diaria", f"${cuota_diaria_sim:,.2f}")
 
+    except Exception as e:
+        db.rollback()
+        st.error(f"❌ Ocurrió un error en el módulo de préstamos: {e}")
     finally:
         db.close()
