@@ -275,7 +275,7 @@ def render_prestamos(usuario_actual: str = "admin"):
                                     try:
                                         prestamo_service.registrar_pago_inteligente(
                                             prestamo_id=p.id,
-                                            monto_pago=Decimal(str(valor_abono)),
+                                            monto_pagado=Decimal(str(valor_abono)),  # ⚡ Corregido a monto_pagado
                                             usuario=current_user
                                         )
                                         st.success("✅ Pago inteligente aplicado y registrado correctamente.")
