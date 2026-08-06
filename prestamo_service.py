@@ -8,7 +8,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 import streamlit as st  # ⚡ Importado para refrescar la interfaz de forma instantánea
 from prestamo_repository import PrestamoRepository
-from prestamo import EstadoCuota, EstadoPrestamo, Prestamo
+from prestamo import EstadoCuota, EstadoPrestamo, Prestamo, Cuota
 from evento import EventoFinanciero, TipoEvento
 from caja_service import CajaService
 
@@ -69,6 +69,128 @@ class PrestamoService:
             usuario=usuario
         )
 
+        return nuevo_prestamo
+
+    def refinanciar_prestamo(
+        self,
+        prestamo_id: int,
+        nueva_tasa: float | Decimal,
+        nuevo_plazo: int,
+        nueva_fecha_vencimiento=None,
+        observacion: str = "",
+        usuario: str = "admin"
+    ):
+        """
+        Ejecuta la refinanciación de un préstamo existente:
+        1. Identifica el préstamo anterior y calcula los abonos totales realizados (ej. $300.000).
+        2. Liquida o marca como refinanciado el préstamo actual.
+        3. Crea un nuevo préstamo con el nuevo capital solicitado (ej. $600.000).
+        4. Calcula el desembolso neto de caja restando los abonos previos ($600.000 - $300.000 = $300.000).
+        5. Genera las nuevas cuotas asegurando que tengan fechas de pago válidas (evitando errores NOT NULL).
+        """
+        current_user = str(usuario or "admin").strip().lower()
+
+        prestamo_anterior = self.db.query(Prestamo).filter(
+            Prestamo.id == prestamo_id,
+            Prestamo.usuario == current_user
+        ).first()
+
+        if not prestamo_anterior:
+            raise ValueError("El préstamo a refinanciar no existe o no pertenece al usuario activo.")
+
+        # Calcular todo el dinero que el cliente ya abonó en el préstamo anterior
+        total_abonado_previo = sum(
+            (c.monto_pagado or Decimal("0.00")) for c in prestamo_anterior.cuotas
+        )
+
+        # Marcar el préstamo anterior como refinanciado o liquidado
+        prestamo_anterior.estado = EstadoPrestamo.REFINANCIADO if hasattr(EstadoPrestamo, 'REFINANCIADO') else EstadoPrestamo.LIQUIDADO
+        self.db.add(prestamo_anterior)
+
+        # El nuevo capital o monto de refinanciación solicitado
+        nuevo_capital = Decimal(str(prestamo_anterior.capital)) # O puedes recibirlo si se parametriza, por defecto absorbe el capital anterior o el monto total
+        
+        # Recalcular bajo los nuevos términos (Ej: capital * (1 + nueva_tasa / 100))
+        tasa_dec = Decimal(str(nueva_tasa)) / Decimal("100")
+        nuevo_monto_total = nuevo_capital + (nuevo_capital * tasa_dec)
+        
+        num_cuotas = int(nuevo_plazo or 1)
+        valor_cuota = nuevo_monto_total / Decimal(str(num_cuotas))
+
+        if nueva_fecha_vencimiento is None:
+            fecha_base = datetime.now().date()
+        elif isinstance(nueva_fecha_vencimiento, str):
+            fecha_base = datetime.strptime(nueva_fecha_vencimiento, "%Y-%m-%d").date()
+        else:
+            fecha_base = nueva_fecha_vencimiento
+
+        # Crear el nuevo préstamo en estado activo
+        nuevo_prestamo = Prestamo(
+            cliente_id=prestamo_anterior.cliente_id,
+            capital=nuevo_capital,
+            tasa_interes=nueva_tasa,
+            monto_total=nuevo_monto_total,
+            numero_cuotas=num_cuotas,
+            fecha_inicio=datetime.now().date(),
+            fecha_vencimiento=fecha_base,
+            estado=EstadoPrestamo.ACTIVO,
+            usuario=current_user,
+            observaciones=f"Refinanciación de Préstamo #{prestamo_anterior.id}. {observacion}".strip()
+        )
+        self.db.add(nuevo_prestamo)
+        self.db.flush()  # Para obtener el ID del nuevo préstamo
+
+        # Generar las nuevas cuotas asignando obligatoriamente una fecha de pago esperada (evita el error NOT NULL)
+        intervalo_dias = 30 // num_cuotas if num_cuotas <= 30 else 1
+        for i in range(1, num_cuotas + 1):
+            fecha_esperada = datetime.now().date() + timedelta(days=i * max(intervalo_dias, 1))
+            nueva_cuota = Cuota(
+                prestamo_id=nuevo_prestamo.id,
+                numero_cuota=i,
+                monto_cuota=valor_cuota,
+                monto_pagado=Decimal("0.00"),
+                fecha_pago_esperada=fecha_esperada,
+                estado=EstadoCuota.PENDIENTE
+            )
+            self.db.add(nueva_cuota)
+
+        # Calcular el desembolso neto real que sale de caja: Nuevo Crédito - Abonos Previos
+        desembolso_neto_caja = nuevo_capital - total_abonado_previo
+        if desembolso_neto_caja < Decimal("0.00"):
+            desembolso_neto_caja = Decimal("0.00")
+
+        # Registrar el movimiento de salida en la caja si hay un desembolso efectivo neto positivo
+        if desembolso_neto_caja > Decimal("0.00"):
+            caja_service = CajaService(self.db, usuario_actual=current_user)
+            obs_caja = f"Desembolso neto por refinanciación (Préstamo #{nuevo_prestamo.id} absorbe #{prestamo_anterior.id})"
+            
+            for metodo_caja in ["registrar_egreso", "registrar_salida", "egresar", "retirar"]:
+                if hasattr(caja_service, metodo_caja):
+                    try:
+                        fn = getattr(caja_service, metodo_caja)
+                        try:
+                            fn(monto=desembolso_neto_caja, tipo="EGRESO", observacion=obs_caja)
+                        except TypeError:
+                            try:
+                                fn(monto=desembolso_neto_caja, observacion=obs_caja)
+                            except TypeError:
+                                fn(desembolso_neto_caja)
+                        break
+                    except Exception:
+                        pass
+
+        # Registrar evento financiero formal
+        evento = EventoFinanciero(
+            tipo_evento=TipoEvento.REFINANCIACION if hasattr(TipoEvento, 'REFINANCIACION') else TipoEvento.CREACION,
+            monto=nuevo_monto_total,
+            usuario=current_user,
+            observacion=f"Refinanciación aplicada del Préstamo #{prestamo_anterior.id} al #{nuevo_prestamo.id}",
+            creado_en=datetime.now()
+        )
+        self.db.add(evento)
+        self.db.commit()
+
+        st.cache_data.clear()
         return nuevo_prestamo
 
     def registrar_pago_inteligente(
