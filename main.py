@@ -156,6 +156,7 @@ class RepositorioFinanciero:
                 numero_cuota=i,
                 monto_cuota=monto_nueva_cuota,
                 monto_pagado=Decimal("0.00"),
+                fecha_pago_esperada=datetime.now().date() + timedelta(days=i * 30),
                 estado=EstadoCuota.PENDIENTE
             )
             db.add(nueva_cuota)
@@ -164,7 +165,7 @@ class RepositorioFinanciero:
         return True
 
 
-# --- MÓDULO 1: DASHBOARD / CAJA (CORRECCIÓN 1: Formulario duplicado eliminado) ---
+# --- MÓDULO 1: DASHBOARD / CAJA ---
 def render_dashboard(usuario):
     current_user = str(usuario or "admin").strip().lower()
 
@@ -315,6 +316,7 @@ def render_pagos(usuario):
                 text-align: center;
                 border-radius: 4px;
                 color: #6c757d;
+                font-weight: bold;
                 margin-bottom: 6px;
             }
             </style>
@@ -370,7 +372,7 @@ def render_pagos(usuario):
 # --- MÓDULO 3: CLIENTES ---
 def render_clientes(usuario):
     st.title(f"👥 Módulo de Clientes - {usuario.capitalize()}")
-    st.markdown("Gestión de directorio, control de abonos por cliente y opciones de refinanciación integradas.")
+    st.markdown("Gestión de directorio y control general de clientes registrados.")
 
     db = SessionLocal()
     try:
@@ -379,6 +381,9 @@ def render_clientes(usuario):
         with st.expander("➕ Registrar Nuevo Cliente", expanded=False):
             with st.form("form_nuevo_cliente"):
                 nombre = st.text_input("Nombre completo *", key="input_nuevo_cliente_nombre_main")
+                documento = st.text_input("Documento de Identidad", key="input_nuevo_cliente_doc_main")
+                telefono = st.text_input("Teléfono de Contacto", key="input_nuevo_cliente_tel_main")
+                direccion = st.text_input("Dirección", key="input_nuevo_cliente_dir_main")
                 
                 submitted = st.form_submit_button("Guardar Cliente", type="primary")
                 if submitted:
@@ -386,9 +391,9 @@ def render_clientes(usuario):
                         try:
                             repo.crear_cliente(
                                 nombre=nombre.strip(),
-                                documento="S/D",
-                                telefono="S/D",
-                                direccion="S/D",
+                                documento=documento.strip() or "S/D",
+                                telefono=telefono.strip() or "S/D",
+                                direccion=direccion.strip() or "S/D",
                                 usuario=usuario
                             )
                             db.commit()
@@ -401,70 +406,31 @@ def render_clientes(usuario):
                         st.warning("El nombre del cliente es obligatorio.")
 
         st.divider()
-        st.subheader("📋 Directorio de Clientes y Gestión de Créditos")
+        st.subheader("📋 Directorio de Clientes")
         clientes = repo.obtener_por_usuario(usuario) if hasattr(repo, "obtener_por_usuario") else repo.listar_todos()
 
         if not clientes:
             st.info("No hay clientes registrados todavía.")
             return
 
+        data_clientes = []
         for c in clientes:
-            with st.expander(f"📁 Cliente: {getattr(c, 'nombre_completo', 'N/A')} (ID: {c.id})"):
-                st.write(f"**Documento:** {getattr(c, 'documento', 'S/D')} | **Teléfono:** {getattr(c, 'telefono', 'S/D')}")
-                
-                prestamos_cliente = db.query(Prestamo).filter(
-                    Prestamo.cliente_id == c.id, 
-                    Prestamo.usuario == usuario,
-                    Prestamo.estado == EstadoPrestamo.ACTIVO
-                ).all()
+            prestamos_cliente = db.query(Prestamo).filter(
+                Prestamo.cliente_id == c.id, 
+                Prestamo.usuario == usuario,
+                Prestamo.estado == EstadoPrestamo.ACTIVO
+            ).all()
 
-                if prestamos_cliente:
-                    for p in prestamos_cliente:
-                        st.markdown("---")
-                        st.markdown(f"**Préstamo Activo #{p.id}** — Capital Total: ${p.monto_total:,.2f}")
-                        
-                        # 1. SECCIÓN DE ABONO
-                        st.markdown("### 💰 Registro de Abono")
-                        with st.form(f"form_abono_cli_{c.id}_p_{p.id}"):
-                            monto_ab = st.number_input("Monto a abonar ($)", min_value=0.0, value=25000.0, step=1000.0, key=f"ab_{p.id}")
-                            btn_ab = st.form_submit_button("Aplicar Abono Inteligente", type="primary")
-                            if btn_ab:
-                                try:
-                                    RepositorioFinanciero.registrar_abono(db, p.id, monto_ab, usuario)
-                                    st.success(f"¡Abono de ${monto_ab:,.2f} aplicado correctamente al préstamo #{p.id}!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Error al aplicar abono: {e}")
+            data_clientes.append({
+                "ID": c.id,
+                "Nombre Completo": getattr(c, 'nombre_completo', 'N/A'),
+                "Documento": getattr(c, 'documento', 'S/D'),
+                "Teléfono": getattr(c, 'telefono', 'S/D'),
+                "Préstamos Activos": len(prestamos_cliente)
+            })
 
-                        # 2. SECCIÓN DE REFINANCIACIÓN
-                        st.markdown("### 🔄 Opción de Refinanciación")
-                        st.caption("Diagrama de decisión: ¿Desea refinanciar este crédito?")
-                        
-                        refinar_decision = st.radio(
-                            "¿Aplicar proceso de refinanciación?",
-                            options=["No", "Sí"],
-                            key=f"radio_ref_{p.id}",
-                            horizontal=True
-                        )
+        st.dataframe(pd.DataFrame(data_clientes), use_container_width=True, hide_index=True)
 
-                        if refinar_decision == "Sí":
-                            st.info("Proceso de refinanciación activado. Ingrese los nuevos términos estructurales:")
-                            with st.form(f"form_refinanciar_{p.id}"):
-                                nuevo_plazo = st.number_input("Nuevo Plazo (Número de cuotas)", min_value=1, value=12, step=1, key=f"cli_ref_plazo_{p.id}")
-                                nueva_tasa = st.number_input("Nueva Tasa / Ajuste (%)", min_value=0.0, value=0.0, key=f"cli_ref_tasa_{p.id}")
-                                btn_ref = st.form_submit_button("Ejecutar Refinanciación", type="primary")
-
-                                if btn_ref:
-                                    try:
-                                        RepositorioFinanciero.procesar_refinanciacion(db, p.id, int(nuevo_plazo), float(nueva_tasa), usuario)
-                                        st.success(f"¡Préstamo #{p.id} refinanciado con éxito!")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"❌ Error en la refinanciación: {e}")
-                        else:
-                            st.markdown("*Refinanciación inactiva para este préstamo.*")
-                else:
-                    st.info("Este cliente no tiene préstamos activos asociados para gestionar abonos o refinanciaciones.")
     finally:
         db.close()
 
