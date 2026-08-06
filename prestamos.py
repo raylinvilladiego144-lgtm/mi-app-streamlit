@@ -10,7 +10,7 @@ from datetime import date
 import io
 import streamlit as st
 
-# Importaciones planas corregidas para la estructura de tu proyecto
+# Importaciones de la aplicación
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
@@ -268,8 +268,8 @@ def render_prestamos(usuario_actual: str = "admin"):
                                     try:
                                         prestamo_service.registrar_pago_inteligente(
                                             prestamo_id=p.id,
-                                            monto_pago=Decimal(str(valor_abono)),
-                                            usuario=current_user
+                                            monto_pagado=Decimal(str(valor_abono)),
+                                            usuario_actual=current_user
                                         )
                                         st.success("✅ Pago inteligente aplicado y registrado correctamente.")
                                         st.rerun()
@@ -282,9 +282,10 @@ def render_prestamos(usuario_actual: str = "admin"):
                         with st.form(key=f"form_refinanciacion_{p.id}"):
                             desea_refinanciar = st.selectbox("¿Desea refinanciar?", options=["No", "Sí"], key=f"sel_refinanciar_{p.id}")
                             
+                            nuevo_capital_ref = st.number_input("Nuevo Capital / Saldo Base ($)", min_value=0.0, value=float(getattr(p, 'capital', 0.0)), step=100.0, key=f"ref_capital_{p.id}")
                             nueva_tasa = st.number_input("Nueva tasa (%)", min_value=0.0, value=float(tasa_val), step=0.5, key=f"ref_tasa_{p.id}")
-                            nuevo_plazo = st.number_input("Nuevo plazo en días", min_value=1, value=30, step=1, key=f"ref_plazo_{p.id}")
-                            nueva_fecha = st.date_input("Nueva fecha de vencimiento", value=date.today(), key=f"ref_fecha_{p.id}")
+                            nuevo_plazo_cuotas = st.number_input("Nuevo Número de Cuotas", min_value=1, value=int(getattr(p, 'numero_cuotas', 1)), step=1, key=f"ref_num_cuotas_{p.id}")
+                            nueva_fecha = st.date_input("Nueva fecha de vencimiento base", value=date.today(), key=f"ref_fecha_{p.id}")
                             observacion_ref = st.text_area("Observación de refinanciación", key=f"ref_obs_{p.id}")
                             
                             btn_refinanciar = st.form_submit_button("Procesar Refinanciación", use_container_width=True)
@@ -294,13 +295,14 @@ def render_prestamos(usuario_actual: str = "admin"):
                                     try:
                                         prestamo_service.refinanciar_prestamo(
                                             prestamo_id=p.id,
+                                            nuevo_capital=Decimal(str(nuevo_capital_ref)),
                                             nueva_tasa=Decimal(str(nueva_tasa)),
-                                            nuevo_plazo=int(nuevo_plazo),
+                                            nuevo_plazo=int(nuevo_plazo_cuotas),
                                             nueva_fecha_vencimiento=nueva_fecha,
                                             observacion=observacion_ref,
                                             usuario=current_user
                                         )
-                                        st.success("🎉 Préstamo refinanciado con éxito.")
+                                        st.success("🎉 Préstamo refinanciado con éxito y caja actualizada.")
                                         st.rerun()
                                     except Exception as ex_ref:
                                         st.error(f"❌ Error al refinanciar: {ex_ref}")
@@ -317,8 +319,8 @@ def render_prestamos(usuario_actual: str = "admin"):
                             datos_eventos = []
                             for ev in eventos_prestamo:
                                 datos_eventos.append({
-                                    "Fecha": str(ev.fecha),
-                                    "Tipo": getattr(ev, 'tipo', 'TRANSACCIÓN'),
+                                    "Fecha": str(ev.fecha if hasattr(ev, 'fecha') else getattr(ev, 'creado_en', '')),
+                                    "Tipo": getattr(ev, 'tipo_evento', getattr(ev, 'tipo', 'TRANSACCIÓN')),
                                     "Monto ($)": float(getattr(ev, 'monto', 0.0)),
                                     "Usuario": getattr(ev, 'usuario', current_user),
                                     "Observación": getattr(ev, 'observacion', '')
