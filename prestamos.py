@@ -10,11 +10,12 @@ from datetime import date
 import io
 import streamlit as st
 
-# Importaciones planas para la estructura de tu proyecto
+# Importaciones planas corregidas para la estructura de tu proyecto
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
-from prestamo import Cuota, EstadoCuota, EstadoPrestamo, EventoFinanciero
+from prestamo import Cuota, EstadoCuota, EstadoPrestamo, ModalidadInteres
+from evento import EventoFinanciero, TipoEvento
 from prestamo_service import PrestamoService
 
 # ReportLab para generación de PDFs
@@ -211,7 +212,6 @@ def render_prestamos(usuario_actual: str = "admin"):
 
                     with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} — {nombre_cli} | Capital: ${getattr(p, 'capital', 0.0):,.2f} | Estado: {estado_str}"):
                         
-                        # CORRECCIÓN 2 & 3 & 4: Información completa del préstamo
                         c_info1, c_info2, c_info3 = st.columns(3)
                         with c_info1:
                             st.write(f"**Capital:** ${getattr(p, 'capital', 0.0):,.2f}")
@@ -235,7 +235,6 @@ def render_prestamos(usuario_actual: str = "admin"):
                         if not cuotas_prestamo:
                             st.warning("⚠️ Este préstamo no tiene cuotas generadas en el sistema.")
                         else:
-                            # CORRECCIÓN 5: Tabla de cuotas mejorada con fecha esperada, real y saldo de cuota
                             datos_cuotas = []
                             for cuota in cuotas_prestamo:
                                 saldo_c = getattr(cuota, 'saldo_cuota', cuota.monto_cuota - cuota.monto_pagado)
@@ -252,7 +251,6 @@ def render_prestamos(usuario_actual: str = "admin"):
                             
                             st.dataframe(datos_cuotas, use_container_width=True)
 
-                            # CORRECCIÓN 7: El Pago Inteligente usando Servicio
                             st.markdown("#### 💰 Pago Inteligente")
                             st.caption("Distribución automática cubriendo cuotas pendientes en orden cronológico.")
 
@@ -280,7 +278,6 @@ def render_prestamos(usuario_actual: str = "admin"):
 
                         st.divider()
 
-                        # CORRECCIÓN 8: Agregar refinanciación debajo del Pago Inteligente
                         st.markdown("#### 🔄 Refinanciación de Préstamo")
                         with st.form(key=f"form_refinanciacion_{p.id}"):
                             desea_refinanciar = st.selectbox("¿Desea refinanciar?", options=["No", "Sí"], key=f"sel_refinanciar_{p.id}")
@@ -312,7 +309,6 @@ def render_prestamos(usuario_actual: str = "admin"):
 
                         st.divider()
 
-                        # CORRECCIÓN 6: Historial del préstamo debajo de la tabla y refinanciación
                         st.markdown("#### 📜 Historial del Préstamo")
                         eventos_prestamo = db.query(EventoFinanciero).filter(EventoFinanciero.prestamo_id == p.id).all()
                         if not eventos_prestamo:
@@ -331,7 +327,6 @@ def render_prestamos(usuario_actual: str = "admin"):
 
                         st.divider()
 
-                        # CORRECCIÓN 9: Paz y Salvo aparece únicamente cuando EstadoPrestamo.LIQUIDADO
                         if estado_val == EstadoPrestamo.LIQUIDADO or estado_str.upper() == "LIQUIDADO":
                             st.success("🎯 Este crédito se encuentra **LIQUIDADO**. Puede descargar su Paz y Salvo:")
                             pdf_data = generar_pdf_paz_y_salvo(
