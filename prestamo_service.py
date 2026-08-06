@@ -74,6 +74,7 @@ class PrestamoService:
     def refinanciar_prestamo(
         self,
         prestamo_id: int,
+        nuevo_capital: float | Decimal,
         nueva_tasa: float | Decimal,
         nuevo_plazo: int,
         nueva_fecha_vencimiento=None,
@@ -84,7 +85,7 @@ class PrestamoService:
         Ejecuta la refinanciación de un préstamo existente:
         1. Identifica el préstamo anterior y calcula los abonos totales realizados (ej. $300.000).
         2. Liquida o marca como refinanciado el préstamo actual.
-        3. Crea un nuevo préstamo con el nuevo capital solicitado (ej. $600.000).
+        3. Crea un nuevo préstamo con el nuevo capital digitado por el usuario (ej. $600.000).
         4. Calcula el desembolso neto de caja restando los abonos previos ($600.000 - $300.000 = $300.000).
         5. Genera las nuevas cuotas asegurando que tengan fechas de pago válidas (evitando errores NOT NULL).
         """
@@ -107,12 +108,12 @@ class PrestamoService:
         prestamo_anterior.estado = EstadoPrestamo.REFINANCIADO if hasattr(EstadoPrestamo, 'REFINANCIADO') else EstadoPrestamo.LIQUIDADO
         self.db.add(prestamo_anterior)
 
-        # El nuevo capital o monto de refinanciación solicitado
-        nuevo_capital = Decimal(str(prestamo_anterior.capital)) # O puedes recibirlo si se parametriza, por defecto absorbe el capital anterior o el monto total
+        # Nuevo capital digitado por el usuario en la interfaz
+        capital_dec = Decimal(str(nuevo_capital or 0.0))
         
         # Recalcular bajo los nuevos términos (Ej: capital * (1 + nueva_tasa / 100))
         tasa_dec = Decimal(str(nueva_tasa)) / Decimal("100")
-        nuevo_monto_total = nuevo_capital + (nuevo_capital * tasa_dec)
+        nuevo_monto_total = capital_dec + (capital_dec * tasa_dec)
         
         num_cuotas = int(nuevo_plazo or 1)
         valor_cuota = nuevo_monto_total / Decimal(str(num_cuotas))
@@ -124,11 +125,11 @@ class PrestamoService:
         else:
             fecha_base = nueva_fecha_vencimiento
 
-        # Crear el nuevo préstamo en estado activo
+        # Crear el nuevo préstamo en estado activo (usando 'porcentaje_interes' correcto)
         nuevo_prestamo = Prestamo(
             cliente_id=prestamo_anterior.cliente_id,
-            capital=nuevo_capital,
-            tasa_interes=nueva_tasa,
+            capital=capital_dec,
+            porcentaje_interes=nueva_tasa,
             monto_total=nuevo_monto_total,
             numero_cuotas=num_cuotas,
             fecha_inicio=datetime.now().date(),
@@ -140,7 +141,7 @@ class PrestamoService:
         self.db.add(nuevo_prestamo)
         self.db.flush()  # Para obtener el ID del nuevo préstamo
 
-        # Generar las nuevas cuotas asignando obligatoriamente una fecha de pago esperada (evita el error NOT NULL)
+        # Generar las nuevas cuotas asignando obligatoriamente una fecha de pago esperada
         intervalo_dias = 30 // num_cuotas if num_cuotas <= 30 else 1
         for i in range(1, num_cuotas + 1):
             fecha_esperada = datetime.now().date() + timedelta(days=i * max(intervalo_dias, 1))
@@ -154,8 +155,8 @@ class PrestamoService:
             )
             self.db.add(nueva_cuota)
 
-        # Calcular el desembolso neto real que sale de caja: Nuevo Crédito - Abonos Previos
-        desembolso_neto_caja = nuevo_capital - total_abonado_previo
+        # Calcular el desembolso neto real que sale de caja: Nuevo Capital - Abonos Previos
+        desembolso_neto_caja = capital_dec - total_abonado_previo
         if desembolso_neto_caja < Decimal("0.00"):
             desembolso_neto_caja = Decimal("0.00")
 
