@@ -155,20 +155,10 @@ class PrestamoService:
             caja_service = CajaService(self.db, usuario_actual=current_user)
             obs_caja = f"Desembolso neto por refinanciación (Préstamo #{nuevo_prestamo.id} absorbe #{prestamo_anterior.id})"
             
-            for metodo_caja in ["registrar_egreso", "registrar_salida", "egresar", "retirar"]:
-                if hasattr(caja_service, metodo_caja):
-                    try:
-                        fn = getattr(caja_service, metodo_caja)
-                        try:
-                            fn(monto=desembolso_neto_caja, tipo="EGRESO", observacion=obs_caja)
-                        except TypeError:
-                            try:
-                                fn(monto=desembolso_neto_caja, observacion=obs_caja)
-                            except TypeError:
-                                fn(desembolso_neto_caja)
-                        break
-                    except Exception:
-                        pass
+            if hasattr(caja_service, "registrar_egreso"):
+                caja_service.registrar_egreso(monto=desembolso_neto_caja, observacion=obs_caja)
+            elif hasattr(caja_service, "egresar"):
+                caja_service.egresar(desembolso_neto_caja)
 
         evento = EventoFinanciero(
             tipo_evento=TipoEvento.RENOVACION_REALIZADA if hasattr(TipoEvento, 'RENOVACION_REALIZADA') else TipoEvento.CREACION,
@@ -193,7 +183,7 @@ class PrestamoService:
     ) -> EventoFinanciero:
         """
         Registra un pago de forma inteligente distribuyendo el dinero en las cuotas pendientes.
-        Permite condicionar el impacto en caja (desde Préstamos no afecta la caja; desde Pagos sí).
+        Permite condicionar el impacto en caja de forma limpia y sin duplicidades.
         """
         current_user = str(usuario_actual or "admin").strip().lower()
         
@@ -249,27 +239,14 @@ class PrestamoService:
         detalle_cuotas_str = ", ".join(cuotas_afectadas)
         obs_caja = f"Pago distribuido en cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo.id}). {observacion}".strip()
 
-        # Condicional estricto: solo afecta la caja si registrar_en_caja es True
-        if registrar_en_caja:
+        # Impacto único y limpio en caja (evitando múltiples bucles que generaban doble entrada)
+        if registrar_en_caja and total_abonado_efectivo > Decimal("0.00"):
             caja_service = CajaService(self.db, usuario_actual=current_user)
-            operacion_exitosa = False
-            for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
-                if hasattr(caja_service, metodo_caja):
-                    try:
-                        fn = getattr(caja_service, metodo_caja)
-                        try:
-                            fn(monto=total_abonado_efectivo, tipo="INGRESO", observacion=obs_caja)
-                        except TypeError:
-                            try:
-                                fn(monto=total_abonado_efectivo, observacion=obs_caja)
-                            except TypeError:
-                                fn(total_abonado_efectivo)
-                        operacion_exitosa = True
-                        break
-                    except Exception:
-                        pass
-
-            if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
+            if hasattr(caja_service, "registrar_ingreso"):
+                caja_service.registrar_ingreso(monto=total_abonado_efectivo, observacion=obs_caja)
+            elif hasattr(caja_service, "ingresar"):
+                caja_service.ingresar(total_abonado_efectivo)
+            elif hasattr(caja_service, "caja") and caja_service.caja:
                 if hasattr(caja_service.caja, "saldo_disponible"):
                     caja_service.caja.saldo_disponible += total_abonado_efectivo
                     self.db.add(caja_service.caja)
