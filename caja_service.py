@@ -1,177 +1,103 @@
 """
 caja_service.py
-Servicio encargado de calcular el estado financiero de la caja,
-capital disponible, saldo pendiente por cobrar en préstamos y
-registrar/consultar movimientos de aporte, retiro y eventos del sistema
-filtrados por el usuario actual.
+Servicio centralizado para la gestión financiera. 
+Garantiza la integridad de la caja mediante eventos inmutables.
 """
 
 from decimal import Decimal
-from typing import Dict, List
-import streamlit as st  # ⚡ Importado para refrescar el dashboard de inmediato
+from typing import Dict, List, Optional
+try:
+    import streamlit as st
+except ImportError:
+    st = None
 
 from sqlalchemy.orm import Session
-
-from evento import (
-    EventoFinanciero,
-    TipoEvento,
-)
-from prestamo import (
-    Prestamo,
-    EstadoPrestamo,
-    EstadoCuota,
-)
-
+from evento import EventoFinanciero, TipoEvento
+from prestamo import Prestamo, EstadoPrestamo, EstadoCuota
 
 class CajaService:
-    """
-    Servicio para administrar la caja del sistema por usuario.
-    """
-
     def __init__(self, db: Session, usuario_actual: str = "admin"):
         self.db = db
         self.usuario_actual = usuario_actual
 
-    def obtener_saldo_actual(self) -> Decimal:
-        """
-        Retorna el saldo disponible en caja del usuario actual.
-        """
-        resumen = self.obtener_resumen_financiero()
-        return resumen["caja_disponible"]
-
-    obtener_saldo = obtener_saldo_actual
-
-    def listar_movimientos(self, limite: int = 100) -> List[EventoFinanciero]:
-        """
-        Obtiene la lista de movimientos y eventos financieros del usuario actual.
-        """
-        query = self.db.query(EventoFinanciero)
-        if hasattr(EventoFinanciero, "usuario"):
-            query = query.filter(EventoFinanciero.usuario == self.usuario_actual)
-
-        return (
-            query.order_by(
-                EventoFinanciero.fecha.desc()
-                if hasattr(EventoFinanciero, "fecha")
-                else EventoFinanciero.id.desc()
-            )
-            .limit(limite)
-            .all()
-        )
-
-    obtener_historial = listar_movimientos
+    def _limpiar_cache(self):
+        if st:
+            st.cache_data.clear()
 
     def obtener_resumen_financiero(self) -> Dict[str, Decimal]:
-        """
-        Reconstruye el estado financiero leyendo el historial y la cartera activa del usuario actual.
-        """
-        query_eventos = self.db.query(EventoFinanciero)
-        if hasattr(EventoFinanciero, "usuario"):
-            query_eventos = query_eventos.filter(EventoFinanciero.usuario == self.usuario_actual)
+        """Reconstruye el estado financiero basado exclusivamente en eventos."""
+        eventos = self.db.query(EventoFinanciero).filter(
+            EventoFinanciero.usuario == self.usuario_actual
+        ).all()
 
-        eventos = query_eventos.all()
+        entradas = sum((e.monto for e in eventos if e.tipo_evento in 
+                       [TipoEvento.PAGO_RECIBIDO, TipoEvento.APORTE_CAJA]), Decimal("0.00"))
+        
+        salidas = sum((e.monto for e in eventos if e.tipo_evento in 
+                      [TipoEvento.PRESTAMO_CREADO, TipoEvento.RETIRO_CAJA]), Decimal("0.00"))
 
-        entradas_caja = Decimal("0.00")
-        salidas_caja = Decimal("0.00")
+        caja_disponible = entradas - salidas
 
-        for evento in eventos:
-            if evento.tipo_evento in (
-                TipoEvento.PAGO_RECIBIDO,
-                TipoEvento.APORTE_CAJA,
-            ):
-                entradas_caja += evento.monto
-
-            elif evento.tipo_evento in (
-                TipoEvento.PRESTAMO_CREADO,
-                TipoEvento.RETIRO_CAJA,
-            ):
-                salidas_caja += evento.monto
-
-        caja_disponible = entradas_caja - salidas_caja
-
-        # Filtrar préstamos activos del usuario
-        query_prestamos = self.db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO)
-        if hasattr(Prestamo, "usuario"):
-            query_prestamos = query_prestamos.filter(Prestamo.usuario == self.usuario_actual)
-
-        prestamos_activos = query_prestamos.all()
+        # Cálculo de cartera
+        prestamos = self.db.query(Prestamo).filter(
+            Prestamo.usuario == self.usuario_actual,
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).all()
 
         capital_prestado = Decimal("0.00")
-
-        for prestamo in prestamos_activos:
-            if hasattr(prestamo, "cuotas") and prestamo.cuotas:
-                saldo_prestamo_activo = Decimal("0.00")
-                for cuota in prestamo.cuotas:
-                    if cuota.estado != EstadoCuota.PAGADA:
-                        monto_pagado = cuota.monto_pagado or Decimal("0.00")
-                        saldo_cuota = cuota.monto_cuota - monto_pagado
-                        if saldo_cuota > Decimal("0.00"):
-                            saldo_prestamo_activo += saldo_cuota
-                capital_prestado += saldo_prestamo_activo if saldo_prestamo_activo > 0 else prestamo.capital
-            else:
-                capital_prestado += prestamo.capital
-
-        capital_total = caja_disponible + capital_prestado
+        for p in prestamos:
+            # Sumar saldos pendientes de cuotas o el capital total si no hay cuotas
+            saldo_cuotas = sum((c.monto_cuota - (c.monto_pagado or 0) for c in p.cuotas 
+                              if c.estado != EstadoCuota.PAGADA), Decimal("0.00"))
+            capital_prestado += saldo_cuotas if saldo_cuotas > 0 else (p.capital or 0)
 
         return {
             "caja_disponible": caja_disponible,
             "capital_prestado": capital_prestado,
-            "capital_total": capital_total,
-            "entradas_totales": entradas_caja,
-            "salidas_totales": salidas_caja,
+            "capital_total": caja_disponible + capital_prestado,
+            "entradas_totales": entradas,
+            "salidas_totales": salidas
         }
 
-    def registrar_aporte(
-        self,
-        monto: Decimal,
-        observacion: str,
-    ) -> EventoFinanciero:
-        """
-        Registra un aporte asignado al usuario actual.
-        """
+    def registrar_ingreso(self, monto: Decimal, observacion: str, tipo: TipoEvento = TipoEvento.APORTE_CAJA) -> EventoFinanciero:
+        """Método unificado para registrar cualquier entrada de dinero."""
+        monto = Decimal(str(monto))
         evento = EventoFinanciero(
-            tipo_evento=TipoEvento.APORTE_CAJA,
+            tipo_evento=tipo,
             monto=monto,
             usuario=self.usuario_actual,
-            observacion=observacion,
+            observacion=observacion
         )
-
         self.db.add(evento)
         self.db.commit()
         self.db.refresh(evento)
-
-        # ⚡ Borrado inmediato de caché para reflejar cambios al instante
-        st.cache_data.clear()
-
+        self._limpiar_cache()
         return evento
 
-    def registrar_retiro(
-        self,
-        monto: Decimal,
-        observacion: str,
-    ) -> EventoFinanciero:
-        """
-        Registra un retiro del usuario validando disponibilidad.
-        """
-        resumen = self.obtener_resumen_financiero()
+    # Aliases para compatibilidad
+    registrar_aporte = registrar_ingreso
 
+    def registrar_retiro(self, monto: Decimal, observacion: str) -> EventoFinanciero:
+        """Registra un retiro validando saldo disponible."""
+        monto = Decimal(str(monto))
+        resumen = self.obtener_resumen_financiero()
+        
         if monto > resumen["caja_disponible"]:
-            raise ValueError(
-                "No hay suficiente dinero disponible en caja para realizar este retiro."
-            )
+            raise ValueError("Saldo insuficiente en caja.")
 
         evento = EventoFinanciero(
             tipo_evento=TipoEvento.RETIRO_CAJA,
             monto=monto,
             usuario=self.usuario_actual,
-            observacion=observacion,
+            observacion=observacion
         )
-
         self.db.add(evento)
         self.db.commit()
         self.db.refresh(evento)
-
-        # ⚡ Borrado inmediato de caché para reflejar cambios al instante
-        st.cache_data.clear()
-
+        self._limpiar_cache()
         return evento
+
+    def listar_movimientos(self, limite: int = 100) -> List[EventoFinanciero]:
+        return self.db.query(EventoFinanciero).filter(
+            EventoFinanciero.usuario == self.usuario_actual
+        ).order_by(EventoFinanciero.id.desc()).limit(limite).all()
