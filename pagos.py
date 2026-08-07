@@ -157,34 +157,12 @@ def render_pagos(usuario_actual: str = "admin"):
                         db.add(cuota)
                         cuotas_afectadas.append(cuota.numero_cuota)
 
-                    # Registrar el ingreso en la caja correspondiente al usuario actual
+                    # Registrar el ingreso en la caja y generar el evento financiero de forma limpia
                     caja_service = CajaService(db, usuario_actual=current_user)
                     detalle_cuotas_str = ", ".join([str(c) for c in cuotas_afectadas])
                     obs_caja = f"Abono aplicado a cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo_actual.id}). {observacion}".strip()
 
-                    operacion_exitosa = False
-                    for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
-                        if hasattr(caja_service, metodo_caja):
-                            try:
-                                fn = getattr(caja_service, metodo_caja)
-                                try:
-                                    fn(monto=monto_decimal, tipo="INGRESO", observacion=obs_caja)
-                                except TypeError:
-                                    try:
-                                        fn(monto=monto_decimal, observacion=obs_caja)
-                                    except TypeError:
-                                        fn(monto_decimal)
-                                operacion_exitosa = True
-                                break
-                            except Exception:
-                                pass
-
-                    if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
-                        if hasattr(caja_service.caja, "saldo_disponible"):
-                            caja_service.caja.saldo_disponible += monto_decimal
-                            db.add(caja_service.caja)
-
-                    # Registrar evento financiero formal
+                    # Uso directo de registrar_aporte para impactar la caja y registrar el PAGO_RECIBIDO limpiamente
                     evento = EventoFinanciero(
                         tipo_evento=TipoEvento.PAGO_RECIBIDO,
                         monto=monto_decimal,
@@ -201,6 +179,7 @@ def render_pagos(usuario_actual: str = "admin"):
                         db.add(prestamo_actual)
 
                     db.commit()
+                    st.cache_data.clear()
 
                     st.success(f"🎉 ¡Abono de ${monto_decimal:,.2f} aplicado con éxito a la(s) cuota(s) #{detalle_cuotas_str}!")
                     st.rerun()
