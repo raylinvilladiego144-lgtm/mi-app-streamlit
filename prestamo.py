@@ -80,7 +80,7 @@ class Cuota(Base):
     __tablename__ = "cuotas"
 
     id = Column(Integer, primary_key=True, index=True)
-    prestamo_id = Column(Integer, ForeignKey("prestamos.id"), nullable=False)
+    prestamo_id = Column(Integer, ForeignKey("prestamos.id"), nullable=False, index=True)
     
     numero_cuota = Column(Integer, nullable=False)
     monto_cuota = Column(Numeric(12, 2), nullable=False)
