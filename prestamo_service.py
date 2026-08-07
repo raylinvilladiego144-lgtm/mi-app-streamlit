@@ -82,12 +82,8 @@ class PrestamoService:
         usuario: str = "admin"
     ):
         """
-        Ejecuta la refinanciación de un préstamo existente:
-        1. Identifica el préstamo anterior y calcula los abonos totales realizados (ej. $300.000).
-        2. Liquida o marca como refinanciado el préstamo actual.
-        3. Crea un nuevo préstamo con el nuevo capital digitado por el usuario (ej. $600.000).
-        4. Calcula el desembolso neto de caja restando los abonos previos ($600.000 - $300.000 = $300.000).
-        5. Genera las nuevas cuotas asegurando que tengan fechas de pago válidas (evitando errores NOT NULL).
+        Ejecuta la refinanciación de un préstamo existente asegurando el cálculo 
+        correcto del monto_interes para evitar IntegrityError en la base de datos.
         """
         current_user = str(usuario or "admin").strip().lower()
 
@@ -99,21 +95,18 @@ class PrestamoService:
         if not prestamo_anterior:
             raise ValueError("El préstamo a refinanciar no existe o no pertenece al usuario activo.")
 
-        # Calcular todo el dinero que el cliente ya abonó en el préstamo anterior
         total_abonado_previo = sum(
             (c.monto_pagado or Decimal("0.00")) for c in prestamo_anterior.cuotas
         )
 
-        # Marcar el préstamo anterior como refinanciado o liquidado
         prestamo_anterior.estado = EstadoPrestamo.REFINANCIADO if hasattr(EstadoPrestamo, 'REFINANCIADO') else EstadoPrestamo.LIQUIDADO
         self.db.add(prestamo_anterior)
 
-        # Nuevo capital digitado por el usuario en la interfaz
         capital_dec = Decimal(str(nuevo_capital or 0.0))
         
-        # Recalcular bajo los nuevos términos (Ej: capital * (1 + nueva_tasa / 100))
         tasa_dec = Decimal(str(nueva_tasa)) / Decimal("100")
-        nuevo_monto_total = capital_dec + (capital_dec * tasa_dec)
+        monto_interes_calculado = capital_dec * tasa_dec
+        nuevo_monto_total = capital_dec + monto_interes_calculado
         
         num_cuotas = int(nuevo_plazo or 1)
         valor_cuota = nuevo_monto_total / Decimal(str(num_cuotas))
@@ -125,11 +118,11 @@ class PrestamoService:
         else:
             fecha_base = nueva_fecha_vencimiento
 
-        # Crear el nuevo préstamo en estado activo (usando 'porcentaje_interes' correcto)
         nuevo_prestamo = Prestamo(
             cliente_id=prestamo_anterior.cliente_id,
             capital=capital_dec,
             porcentaje_interes=nueva_tasa,
+            monto_interes=monto_interes_calculado,
             monto_total=nuevo_monto_total,
             numero_cuotas=num_cuotas,
             fecha_inicio=datetime.now().date(),
@@ -139,9 +132,8 @@ class PrestamoService:
             observaciones=f"Refinanciación de Préstamo #{prestamo_anterior.id}. {observacion}".strip()
         )
         self.db.add(nuevo_prestamo)
-        self.db.flush()  # Para obtener el ID del nuevo préstamo
+        self.db.flush()
 
-        # Generar las nuevas cuotas asignando obligatoriamente una fecha de pago esperada
         intervalo_dias = 30 // num_cuotas if num_cuotas <= 30 else 1
         for i in range(1, num_cuotas + 1):
             fecha_esperada = datetime.now().date() + timedelta(days=i * max(intervalo_dias, 1))
@@ -155,12 +147,10 @@ class PrestamoService:
             )
             self.db.add(nueva_cuota)
 
-        # Calcular el desembolso neto real que sale de caja: Nuevo Capital - Abonos Previos
         desembolso_neto_caja = capital_dec - total_abonado_previo
         if desembolso_neto_caja < Decimal("0.00"):
             desembolso_neto_caja = Decimal("0.00")
 
-        # Registrar el movimiento de salida en la caja si hay un desembolso efectivo neto positivo
         if desembolso_neto_caja > Decimal("0.00"):
             caja_service = CajaService(self.db, usuario_actual=current_user)
             obs_caja = f"Desembolso neto por refinanciación (Préstamo #{nuevo_prestamo.id} absorbe #{prestamo_anterior.id})"
@@ -180,9 +170,8 @@ class PrestamoService:
                     except Exception:
                         pass
 
-        # Registrar evento financiero formal
         evento = EventoFinanciero(
-            tipo_evento=TipoEvento.REFINANCIACION if hasattr(TipoEvento, 'REFINANCIACION') else TipoEvento.CREACION,
+            tipo_evento=TipoEvento.RENOVACION_REALIZADA if hasattr(TipoEvento, 'RENOVACION_REALIZADA') else TipoEvento.CREACION,
             monto=nuevo_monto_total,
             usuario=current_user,
             observacion=f"Refinanciación aplicada del Préstamo #{prestamo_anterior.id} al #{nuevo_prestamo.id}",
@@ -199,12 +188,12 @@ class PrestamoService:
         prestamo_id: int,
         monto_pagado: float | Decimal,
         usuario_actual: str = "admin",
-        observacion: str = ""
+        observacion: str = "",
+        registrar_en_caja: bool = True
     ) -> EventoFinanciero:
         """
-        Registra un pago de forma inteligente: distribuye el dinero ingresado 
-        cubriendo la cuota actual y abonando automáticamente a las siguientes si sobra,
-        actualizando también de forma correcta la caja y el estado global del préstamo.
+        Registra un pago de forma inteligente distribuyendo el dinero en las cuotas pendientes.
+        Permite condicionar el impacto en caja (desde Préstamos no afecta la caja; desde Pagos sí).
         """
         current_user = str(usuario_actual or "admin").strip().lower()
         
@@ -220,7 +209,6 @@ class PrestamoService:
         if monto_restante <= Decimal("0.00"):
             raise ValueError("El monto del pago debe ser mayor a cero.")
         
-        # Obtener cuotas pendientes ordenadas secuencialmente
         cuotas_pendientes = [
             c for c in prestamo.cuotas 
             if c.estado != EstadoCuota.PAGADA
@@ -241,13 +229,11 @@ class PrestamoService:
             saldo_pendiente_cuota = cuota.monto_cuota - monto_ya_pagado
 
             if monto_restante >= saldo_pendiente_cuota:
-                # El dinero cubre esta cuota por completo
                 monto_restante -= saldo_pendiente_cuota
                 cuota.monto_pagado = cuota.monto_cuota
                 cuota.estado = EstadoCuota.PAGADA
                 total_abonado_efectivo += saldo_pendiente_cuota
             else:
-                # El dinero cubre una parte (abono parcial a la cuota)
                 cuota.monto_pagado = monto_ya_pagado + monto_restante
                 cuota.estado = EstadoCuota.PARCIAL if hasattr(EstadoCuota, 'PARCIAL') else EstadoCuota.PENDIENTE
                 total_abonado_efectivo += monto_restante
@@ -257,45 +243,43 @@ class PrestamoService:
             self.db.add(cuota)
             cuotas_afectadas.append(str(cuota.numero_cuota))
 
-        # Si sobra dinero tras liquidar todas las cuotas pendientes
         if monto_restante > Decimal("0.00"):
             total_abonado_efectivo += monto_restante
 
-        # --- SINCRONIZACIÓN AUTOMÁTICA CON LA CAJA DEL USUARIO ---
-        caja_service = CajaService(self.db, usuario_actual=current_user)
         detalle_cuotas_str = ", ".join(cuotas_afectadas)
         obs_caja = f"Pago distribuido en cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo.id}). {observacion}".strip()
 
-        operacion_exitosa = False
-        for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
-            if hasattr(caja_service, metodo_caja):
-                try:
-                    fn = getattr(caja_service, metodo_caja)
+        # Condicional estricto: solo afecta la caja si registrar_en_caja es True
+        if registrar_en_caja:
+            caja_service = CajaService(self.db, usuario_actual=current_user)
+            operacion_exitosa = False
+            for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
+                if hasattr(caja_service, metodo_caja):
                     try:
-                        fn(monto=total_abonado_efectivo, tipo="INGRESO", observacion=obs_caja)
-                    except TypeError:
+                        fn = getattr(caja_service, metodo_caja)
                         try:
-                            fn(monto=total_abonado_efectivo, observacion=obs_caja)
+                            fn(monto=total_abonado_efectivo, tipo="INGRESO", observacion=obs_caja)
                         except TypeError:
-                            fn(total_abonado_efectivo)
-                    operacion_exitosa = True
-                    break
-                except Exception:
-                    pass
+                            try:
+                                fn(monto=total_abonado_efectivo, observacion=obs_caja)
+                            except TypeError:
+                                fn(total_abonado_efectivo)
+                        operacion_exitosa = True
+                        break
+                    except Exception:
+                        pass
 
-        if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
-            if hasattr(caja_service.caja, "saldo_disponible"):
-                caja_service.caja.saldo_disponible += total_abonado_efectivo
-                self.db.add(caja_service.caja)
+            if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
+                if hasattr(caja_service.caja, "saldo_disponible"):
+                    caja_service.caja.saldo_disponible += total_abonado_efectivo
+                    self.db.add(caja_service.caja)
 
-        # Verificar si todas las cuotas han quedado pagadas para liquidar el préstamo
         self.db.flush()
         todas_pagadas = all(c.estado == EstadoCuota.PAGADA for c in prestamo.cuotas)
         if todas_pagadas:
             prestamo.estado = EstadoPrestamo.LIQUIDADO
             self.db.add(prestamo)
 
-        # Registrar el evento financiero formal en el feed del Dashboard
         evento = EventoFinanciero(
             tipo_evento=TipoEvento.PAGO_RECIBIDO,
             monto=total_abonado_efectivo,
@@ -308,7 +292,5 @@ class PrestamoService:
         self.db.commit()
         self.db.refresh(evento)
 
-        # ⚡ Limpieza inmediata de la caché de Streamlit para actualizar los saldos al instante
         st.cache_data.clear()
-
         return evento
