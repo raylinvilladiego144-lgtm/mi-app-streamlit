@@ -10,7 +10,7 @@ from datetime import date
 import io
 import streamlit as st
 
-# Importaciones planas corregidas para la estructura de tu proyecto
+# Importaciones de la base de datos y repositorios
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
@@ -20,7 +20,6 @@ from prestamo_service import PrestamoService
 
 # ReportLab para generación de PDFs
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -81,13 +80,14 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, cliente_documento: str, prestam
     # Tabla de cuotas para el PDF
     tabla_cuotas_data = [["N° Cuota", "Monto", "Pagado", "V.Esperada", "V. Real", "Estado"]]
     for c in cuotas_data:
+        estado_c_str = c.estado.value if hasattr(c.estado, 'value') else str(c.estado)
         tabla_cuotas_data.append([
             str(c.numero_cuota),
             f"${float(c.monto_cuota):,.2f}",
             f"${float(c.monto_pagado):,.2f}",
             str(c.fecha_pago_esperada),
             str(c.fecha_pago_real or "N/A"),
-            str(c.estado.value if hasattr(c.estado, 'value') else c.estado)
+            str(estado_c_str)
         ])
     
     t_cuotas = Table(tabla_cuotas_data, colWidths=[60, 90, 90, 90, 90, 90])
@@ -133,7 +133,6 @@ def render_prestamos(usuario_actual: str = "admin"):
     db = SessionLocal()
 
     try:
-        # ⚡ Limpieza de sesión pendiente para evitar PendingRollbackError tras errores previos
         try:
             db.rollback()
         except Exception:
@@ -181,12 +180,12 @@ def render_prestamos(usuario_actual: str = "admin"):
                     if btn_crear:
                         cliente_obj = clientes_dict[cliente_seleccionado_str]
                         try:
-                            prestamo_repo.crear_prestamo(
+                            prestamo_service.crear_prestamo(
                                 cliente_id=cliente_obj.id,
                                 capital=Decimal(str(capital)),
-                                tasa_interes=Decimal(str(tasa_interes)),
-                                num_cuotas=int(numero_cuotas),
-                                plazo_dias=int(plazo_dias),
+                                porcentaje_interes=Decimal(str(tasa_interes)),
+                                numero_cuotas=int(numero_cuotas),
+                                frecuencia_dias=int(max(1, plazo_dias // numero_cuotas)),
                                 observaciones=observacion,
                                 usuario=current_user
                             )
@@ -206,32 +205,27 @@ def render_prestamos(usuario_actual: str = "admin"):
                 st.info("ℹ️ No hay préstamos vigentes registrados para este usuario.")
             else:
                 for p in prestamos_activos:
-                    nombre_cli = "Cliente General"
-                    doc_cli = "N/A"
-                    for c in clientes:
-                        if c.id == p.cliente_id:
-                            nombre_cli = c.nombre_completo
-                            doc_cli = getattr(c, 'documento', 'N/A')
-                            break
+                    nombre_cli = p.cliente.nombre_completo if hasattr(p, 'cliente') and p.cliente else "Cliente General"
+                    doc_cli = getattr(p.cliente, 'documento', 'N/A') if hasattr(p, 'cliente') and p.cliente else "N/A"
 
-                    estado_val = getattr(p, 'estado', 'ACTIVO')
+                    estado_val = getattr(p, 'estado', EstadoPrestamo.ACTIVO)
                     estado_str = estado_val.value if hasattr(estado_val, 'value') else str(estado_val)
 
                     with st.expander(f"Préstamo #{getattr(p, 'id', 'N/A')} — {nombre_cli} | Capital: ${getattr(p, 'capital', 0.0):,.2f} | Estado: {estado_str}"):
                         
                         c_info1, c_info2, c_info3 = st.columns(3)
                         with c_info1:
-                            st.write(f"**Capital:** ${getattr(p, 'capital', 0.0):,.2f}")
+                            st.write(f"**Capital:** ${float(getattr(p, 'capital', 0.0)):,.2f}")
                             tasa_val = getattr(p, 'porcentaje_interes', None) if getattr(p, 'porcentaje_interes', None) is not None else getattr(p, 'tasa_interes', 0.0)
                             st.write(f"**Interés:** {tasa_val}%")
-                            st.write(f"**Monto Total:** ${getattr(p, 'monto_total', 0.0):,.2f}")
+                            st.write(f"**Monto Total:** ${float(getattr(p, 'monto_total', 0.0)):,.2f}")
                         with c_info2:
                             st.write(f"**Fecha Adquisición:** {getattr(p, 'fecha_inicio', 'N/A')}")
                             st.write(f"**Fecha Vencimiento:** {getattr(p, 'fecha_vencimiento', 'N/A')}")
                             st.write(f"**Número de Cuotas:** {getattr(p, 'numero_cuotas', 'N/A')}")
                         with c_info3:
-                            st.write(f"**Saldo Pendiente:** ${getattr(p, 'saldo_pendiente', 0.0):,.2f}")
-                            st.write(f"**N° Refinanciaciones:** {getattr(p, 'numero_refinanciaciones', 0)}")
+                            saldo_pend_calc = float(getattr(p, 'monto_total', 0.0)) - sum(float(c.monto_pagado or 0) for c in p.cuotas)
+                            st.write(f"**Saldo Pendiente:** ${saldo_pend_calc:,.2f}")
                             st.write(f"Estado: **{estado_str}**")
 
                         st.markdown("---")
@@ -244,13 +238,13 @@ def render_prestamos(usuario_actual: str = "admin"):
                         else:
                             datos_cuotas = []
                             for cuota in cuotas_prestamo:
-                                saldo_c = getattr(cuota, 'saldo_cuota', cuota.monto_cuota - cuota.monto_pagado)
+                                saldo_c = float(cuota.monto_cuota) - float(cuota.monto_pagado or 0)
                                 estado_cuota_str = cuota.estado.value if hasattr(cuota.estado, 'value') else str(cuota.estado)
                                 datos_cuotas.append({
                                     "Número": cuota.numero_cuota,
                                     "Monto ($)": float(cuota.monto_cuota),
-                                    "Pagado ($)": float(cuota.monto_pagado),
-                                    "Saldo Cuota ($)": float(saldo_c),
+                                    "Pagado ($)": float(cuota.monto_pagado or 0),
+                                    "Saldo Cuota ($)": saldo_c,
                                     "Fecha esperada": str(cuota.fecha_pago_esperada),
                                     "Fecha real de pago": str(cuota.fecha_pago_real or "Pendiente"),
                                     "Estado": estado_cuota_str
@@ -276,7 +270,8 @@ def render_prestamos(usuario_actual: str = "admin"):
                                         prestamo_service.registrar_pago_inteligente(
                                             prestamo_id=p.id,
                                             monto_pagado=Decimal(str(valor_abono)),
-                                            usuario_actual=current_user  # ⚡ Corregido a usuario_actual
+                                            usuario_actual=current_user,
+                                            registrar_en_caja=True
                                         )
                                         st.success("✅ Pago inteligente aplicado y registrado correctamente.")
                                         st.rerun()
@@ -292,7 +287,6 @@ def render_prestamos(usuario_actual: str = "admin"):
                             
                             nuevo_capital_ref = st.number_input("Nuevo Capital / Saldo Base ($)", min_value=0.0, value=float(getattr(p, 'capital', 0.0)), step=100.0, key=f"ref_capital_{p.id}")
                             nueva_tasa = st.number_input("Nueva tasa (%)", min_value=0.0, value=float(tasa_val), step=0.5, key=f"ref_tasa_{p.id}")
-                            nuevo_plazo = st.number_input("Nuevo plazo en días", min_value=1, value=30, step=1, key=f"ref_plazo_{p.id}")
                             nuevo_plazo_cuotas = st.number_input("Nuevo Número de Cuotas", min_value=1, value=int(getattr(p, 'numero_cuotas', 1)), step=1, key=f"ref_num_cuotas_{p.id}")
                             nueva_fecha = st.date_input("Nueva fecha de vencimiento", value=date.today(), key=f"ref_fecha_{p.id}")
                             observacion_ref = st.text_area("Observación de refinanciación", key=f"ref_obs_{p.id}")
@@ -322,7 +316,7 @@ def render_prestamos(usuario_actual: str = "admin"):
                         st.divider()
 
                         st.markdown("#### 📜 Historial del Préstamo")
-                        eventos_prestamo = db.query(EventoFinanciero).filter(EventoFinanciero.prestamo_id == p.id).all()
+                        eventos_prestamo = db.query(EventoFinanciero).filter(EventoFinanciero.prestamo_id == p.id).all() if hasattr(EventoFinanciero, 'prestamo_id') else []
                         if not eventos_prestamo:
                             st.info("ℹ️ No hay eventos financieros registrados para este préstamo.")
                         else:
@@ -384,9 +378,9 @@ def render_prestamos(usuario_actual: str = "admin"):
 
             st.divider()
             m1, m2, m3 = st.columns(3)
-            m1.metric("Total Interés Proyectado", f"${(cap_sim * tasa_sim):,.2f}")
-            m2.metric("Total a Cobrar", f"${total_cobrar_sim:,.2f}")
-            m3.metric("Cuota Referencial Diaria", f"${cuota_diaria_sim:,.2f}")
+            m1.metric("Total Interés Proyectado", f"${float(cap_sim * tasa_sim):,.2f}")
+            m2.metric("Total a Cobrar", f"${float(total_cobrar_sim):,.2f}")
+            m3.metric("Cuota Referencial Diaria", f"${float(cuota_diaria_sim):,.2f}")
 
     except Exception as e:
         db.rollback()
