@@ -1,8 +1,3 @@
-"""
-main.py
-Punto de entrada principal con Login, Dashboard financiero integrado, Préstamos, Pagos, Clientes, Gestión y Respaldos.
-"""
-
 from datetime import datetime, timedelta
 from decimal import Decimal
 import os
