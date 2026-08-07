@@ -79,7 +79,7 @@ def generar_pdf_paz_y_salvo(cliente_nombre: str, cliente_documento: str, prestam
     elementos.append(Spacer(1, 5))
 
     # Tabla de cuotas para el PDF
-    tabla_cuotas_data = [["N° Cuota", "Monto", "Pagado", "Vesperada", "V. Real", "Estado"]]
+    tabla_cuotas_data = [["N° Cuota", "Monto", "Pagado", "V.Esperada", "V. Real", "Estado"]]
     for c in cuotas_data:
         tabla_cuotas_data.append([
             str(c.numero_cuota),
