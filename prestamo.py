@@ -27,6 +27,7 @@ class EstadoPrestamo(str, PyEnum):
     LIQUIDADO = "LIQUIDADO"
     VENCIDO = "VENCIDO"
     ANULADO = "ANULADO"
+    REFINANCIADO = "REFINANCIADO"
 
 
 class EstadoCuota(str, PyEnum):
