@@ -157,19 +157,16 @@ def render_pagos(usuario_actual: str = "admin"):
                         db.add(cuota)
                         cuotas_afectadas.append(cuota.numero_cuota)
 
-                    # Registrar el ingreso en la caja y generar el evento financiero de forma limpia
+                    # Integración limpia a través del CajaService unificado
                     caja_service = CajaService(db, usuario_actual=current_user)
                     detalle_cuotas_str = ", ".join([str(c) for c in cuotas_afectadas])
                     obs_caja = f"Abono aplicado a cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo_actual.id}). {observacion}".strip()
 
-                    # Uso directo de registrar_aporte para impactar la caja y registrar el PAGO_RECIBIDO limpiamente
-                    evento = EventoFinanciero(
-                        tipo_evento=TipoEvento.PAGO_RECIBIDO,
-                        monto=monto_decimal,
-                        usuario=current_user,
+                    # Llamada limpia al servicio que registra el PAGO_RECIBIDO y afecta caja
+                    caja_service.registrar_pago_cuota(
+                        monto=monto_decimal, 
                         observacion=obs_caja
                     )
-                    db.add(evento)
 
                     # Verificar si todas las cuotas del préstamo han sido liquidadas
                     db.flush()
