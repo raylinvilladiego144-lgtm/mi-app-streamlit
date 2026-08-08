@@ -239,35 +239,27 @@ class PrestamoService:
         detalle_cuotas_str = ", ".join(cuotas_afectadas)
         obs_caja = f"Pago distribuido en cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo.id}). {observacion}".strip()
 
-        # Impacto único y limpio en caja (evitando múltiples bucles que generaban doble entrada)
-        if registrar_en_caja and total_abonado_efectivo > Decimal("0.00"):
-            caja_service = CajaService(self.db, usuario_actual=current_user)
-            if hasattr(caja_service, "registrar_ingreso"):
-                caja_service.registrar_ingreso(monto=total_abonado_efectivo, observacion=obs_caja)
-            elif hasattr(caja_service, "ingresar"):
-                caja_service.ingresar(total_abonado_efectivo)
-            elif hasattr(caja_service, "caja") and caja_service.caja:
-                if hasattr(caja_service.caja, "saldo_disponible"):
-                    caja_service.caja.saldo_disponible += total_abonado_efectivo
-                    self.db.add(caja_service.caja)
-
         self.db.flush()
         todas_pagadas = all(c.estado == EstadoCuota.PAGADA for c in prestamo.cuotas)
         if todas_pagadas:
             prestamo.estado = EstadoPrestamo.LIQUIDADO
             self.db.add(prestamo)
 
-        evento = EventoFinanciero(
-            tipo_evento=TipoEvento.PAGO_RECIBIDO,
-            monto=total_abonado_efectivo,
-            usuario=current_user,
-            observacion=obs_caja,
-            creado_en=datetime.now()
-        )
-
-        self.db.add(evento)
-        self.db.commit()
-        self.db.refresh(evento)
+        # Impacto único y limpio en caja: un solo evento PAGO_RECIBIDO, sin duplicidad.
+        # (Antes se llamaba también a caja_service.registrar_ingreso() sin especificar
+        # 'tipo', lo que caía en su valor por defecto APORTE_CAJA y generaba un
+        # segundo evento fantasma con el mismo monto. Ahora solo se usa el método
+        # oficial diseñado para pagos de cuota.)
+        evento = None
+        if registrar_en_caja and total_abonado_efectivo > Decimal("0.00"):
+            caja_service = CajaService(self.db, usuario_actual=current_user)
+            evento = caja_service.registrar_pago_cuota(
+                monto=total_abonado_efectivo,
+                observacion=obs_caja,
+                prestamo_id=prestamo.id
+            )
+        else:
+            self.db.commit()
 
         st.cache_data.clear()
         return evento
