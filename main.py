@@ -27,7 +27,7 @@ init_db()
 # --- CREDENCIALES DE ACCESO ---
 USUARIOS = {
     "simon": "12345**",
-    "raylin": "Barcelona*",
+    "raylin": "Barcelona12*",
     "luis": "123456",
 }
 
