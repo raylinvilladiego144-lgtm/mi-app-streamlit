@@ -208,9 +208,12 @@ class PrestamoRepository:
     def obtener_por_usuario(self, usuario: str) -> list[Prestamo]:
         try:
             self.evaluar_y_recalcular_temporalidad_mensual(usuario=usuario)
-            return self.db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
+            return self.db.query(Prestamo).filter(
+                Prestamo.usuario == usuario,
+                Prestamo.estado == EstadoPrestamo.ACTIVO
+            ).all()
         except Exception:
-            return self.db.query(Prestamo).all()
+            return self.db.query(Prestamo).filter(Prestamo.usuario == usuario).all()
 
     def obtener_todos(self) -> list[Prestamo]:
         return self.db.query(Prestamo).all()
