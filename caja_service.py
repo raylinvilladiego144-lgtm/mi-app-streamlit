@@ -82,29 +82,6 @@ class CajaService:
         """Registra un aporte externo de capital a la caja."""
         return self.registrar_ingreso(monto, observacion, tipo=TipoEvento.APORTE_CAJA)
 
-    def registrar_desembolso_prestamo(self, monto: Decimal, observacion: str, prestamo_id: Optional[int] = None) -> EventoFinanciero:
-        """Registra la salida de caja por el desembolso de un préstamo nuevo,
-        validando saldo disponible y vinculando el evento al préstamo para
-        mantener trazabilidad contable entre caja y cartera."""
-        monto = Decimal(str(monto))
-        resumen = self.obtener_resumen_financiero()
-
-        if monto > resumen["caja_disponible"]:
-            raise ValueError("Saldo insuficiente en caja para desembolsar este préstamo.")
-
-        evento = EventoFinanciero(
-            tipo_evento=TipoEvento.PRESTAMO_CREADO,
-            monto=monto,
-            usuario=self.usuario_actual,
-            observacion=observacion,
-            prestamo_id=prestamo_id
-        )
-        self.db.add(evento)
-        self.db.commit()
-        self.db.refresh(evento)
-        self._limpiar_cache()
-        return evento
-
     def registrar_retiro(self, monto: Decimal, observacion: str) -> EventoFinanciero:
         """Registra un retiro validando saldo disponible."""
         monto = Decimal(str(monto))
