@@ -147,18 +147,23 @@ class PrestamoService:
             )
             self.db.add(nueva_cuota)
 
-        desembolso_neto_caja = capital_dec - total_abonado_previo
+        # Saldo realmente adeudado del préstamo anterior (lo que falta por pagar,
+        # NO lo que ya se abonó). Solo el excedente sobre esa deuda es efectivo
+        # nuevo que sale de caja; la porción que cubre la deuda anterior es una
+        # conversión de deuda a deuda y no debe mover caja.
+        monto_total_anterior = prestamo_anterior.monto_total or Decimal("0.00")
+        saldo_pendiente_anterior = monto_total_anterior - total_abonado_previo
+        if saldo_pendiente_anterior < Decimal("0.00"):
+            saldo_pendiente_anterior = Decimal("0.00")
+
+        desembolso_neto_caja = capital_dec - saldo_pendiente_anterior
         if desembolso_neto_caja < Decimal("0.00"):
             desembolso_neto_caja = Decimal("0.00")
 
         if desembolso_neto_caja > Decimal("0.00"):
             caja_service = CajaService(self.db, usuario_actual=current_user)
             obs_caja = f"Desembolso neto por refinanciación (Préstamo #{nuevo_prestamo.id} absorbe #{prestamo_anterior.id})"
-            
-            if hasattr(caja_service, "registrar_egreso"):
-                caja_service.registrar_egreso(monto=desembolso_neto_caja, observacion=obs_caja)
-            elif hasattr(caja_service, "egresar"):
-                caja_service.egresar(desembolso_neto_caja)
+            caja_service.registrar_retiro(monto=desembolso_neto_caja, observacion=obs_caja)
 
         evento = EventoFinanciero(
             tipo_evento=TipoEvento.RENOVACION_REALIZADA if hasattr(TipoEvento, 'RENOVACION_REALIZADA') else TipoEvento.CREACION,
