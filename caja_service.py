@@ -58,14 +58,15 @@ class CajaService:
             "salidas_totales": salidas
         }
 
-    def registrar_ingreso(self, monto: Decimal, observacion: str, tipo: TipoEvento = TipoEvento.APORTE_CAJA) -> EventoFinanciero:
-        """Método genérico para registrar entradas de dinero a la caja."""
+    def registrar_ingreso(self, monto: Decimal, observacion: str, tipo: TipoEvento = TipoEvento.APORTE_CAJA, prestamo_id: Optional[int] = None) -> EventoFinanciero:
+        """Método genérico unificado para registrar entradas de dinero a la caja."""
         monto = Decimal(str(monto))
         evento = EventoFinanciero(
             tipo_evento=tipo,
             monto=monto,
             usuario=self.usuario_actual,
-            observacion=observacion
+            observacion=observacion,
+            prestamo_id=prestamo_id
         )
         self.db.add(evento)
         self.db.commit()
@@ -73,12 +74,13 @@ class CajaService:
         self._limpiar_cache()
         return evento
 
-    def registrar_pago_cuota(self, monto: Decimal, observacion: str) -> EventoFinanciero:
-        """Registra específicamente un abono o pago recibido de una cuota de préstamo."""
-        return self.registrar_ingreso(monto, observacion, tipo=TipoEvento.PAGO_RECIBIDO)
+    def registrar_pago_cuota(self, monto: Decimal, observacion: str, prestamo_id: Optional[int] = None) -> EventoFinanciero:
+        """Registra específicamente un abono o pago recibido de una cuota de préstamo impactando caja."""
+        return self.registrar_ingreso(monto, observacion, tipo=TipoEvento.PAGO_RECIBIDO, prestamo_id=prestamo_id)
 
-    # Aliases para compatibilidad
-    registrar_aporte = registrar_ingreso
+    def registrar_aporte(self, monto: Decimal, observacion: str) -> EventoFinanciero:
+        """Registra un aporte externo de capital a la caja."""
+        return self.registrar_ingreso(monto, observacion, tipo=TipoEvento.APORTE_CAJA)
 
     def registrar_retiro(self, monto: Decimal, observacion: str) -> EventoFinanciero:
         """Registra un retiro validando saldo disponible."""
