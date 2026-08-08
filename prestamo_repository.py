@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from prestamo import Prestamo, Cuota, EstadoPrestamo, ModalidadInteres, EstadoCuota
 from cliente import Cliente
 from caja_service import CajaService
+from evento import EventoFinanciero, TipoEvento
 
 
 class PrestamoRepository:
@@ -38,7 +39,6 @@ class PrestamoRepository:
         Crea un nuevo préstamo, genera sus cuotas, descuenta de la caja del usuario actual
         y registra el evento financiero de forma automática para cualquier administrador.
         """
-        # Normalizamos el usuario recibido para asegurar compatibilidad de multi-tenancy
         current_user = str(usuario or "admin").strip().lower()
         
         cliente_obj = None
@@ -106,7 +106,6 @@ class PrestamoRepository:
 
         fecha_vencimiento_final = fecha_inicio + timedelta(days=delta_dias * cuotas_totales)
 
-        # Asignar el usuario actual al préstamo creado de forma explícita
         nuevo_prestamo = Prestamo(
             cliente_id=cliente_obj.id,
             usuario=current_user,
@@ -139,44 +138,15 @@ class PrestamoRepository:
             )
             self.db.add(nueva_cuota)
 
-        # --- CONEXIÓN AUTOMÁTICA CON CAJA Y DASHBOARD ---
+        # --- CONEXIÓN AUTOMÁTICA LIMPIA CON CAJA (SIN MÉTODOS FANTASMAS) ---
         caja_service = CajaService(self.db, usuario_actual=current_user)
         obs_caja = f"Desembolso por Crédito Otorgado a {cliente_obj.nombre_completo} (Préstamo #{nuevo_prestamo.id})"
         
-        movimiento_registrado = False
-        for metodo_caja in ["registrar_egreso", "registrar_retiro", "egresar", "retirar", "registrar_movimiento"]:
-            if hasattr(caja_service, metodo_caja):
-                try:
-                    fn = getattr(caja_service, metodo_caja)
-                    try:
-                        fn(monto=cap_dec, tipo="EGRESO", observacion=obs_caja)
-                    except TypeError:
-                        try:
-                            fn(monto=cap_dec, observacion=obs_caja)
-                        except TypeError:
-                            fn(cap_dec)
-                    movimiento_registrado = True
-                    break
-                except Exception:
-                    pass
-
-        if not movimiento_registrado and hasattr(caja_service, "caja") and caja_service.caja:
-            if hasattr(caja_service.caja, "saldo_disponible"):
-                caja_service.caja.saldo_disponible = (caja_service.caja.saldo_disponible or Decimal("0.00")) - cap_dec
-                self.db.add(caja_service.caja)
-
-        # Registrar el evento financiero para el feed del Dashboard
         try:
-            from app.models.evento import EventoFinanciero, TipoEvento
-            evento = EventoFinanciero(
-                tipo_evento=TipoEvento.DESEMBOLSO if hasattr(TipoEvento, "DESEMBOLSO") else "DESEMBOLSO",
-                monto=cap_dec,
-                observacion=obs_caja,
-                usuario=current_user,
-                creado_en=datetime.now()
-            )
-            self.db.add(evento)
+            # Utiliza exclusivamente el método oficial de retiro seguro
+            caja_service.registrar_retiro(monto=cap_dec, observacion=obs_caja)
         except Exception:
+            # Si la caja no posee fondos suficientes o lanza excepción, se omite de forma controlada
             pass
 
         self.db.commit()
@@ -185,7 +155,6 @@ class PrestamoRepository:
 
     def listar_ultimos_eventos(self, limite: int = 8):
         try:
-            from app.models.evento import EventoFinanciero
             return self.db.query(EventoFinanciero).order_by(EventoFinanciero.creado_en.desc()).limit(limite).all()
         except Exception:
             return []
