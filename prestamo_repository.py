@@ -36,8 +36,13 @@ class PrestamoRepository:
         **kwargs
     ) -> Prestamo:
         """
-        Crea un nuevo préstamo, genera sus cuotas, descuenta de la caja del usuario actual
-        y registra el evento financiero de forma automática para cualquier administrador.
+        Crea un nuevo préstamo y genera sus cuotas.
+
+        No genera ningún evento de caja: el capital prestado se refleja
+        exclusivamente a través del cálculo de cartera (capital_prestado),
+        que se deriva directamente de los préstamos activos y sus cuotas
+        en obtener_resumen_financiero(). La caja disponible no debe verse
+        afectada por el otorgamiento de un crédito.
         """
         current_user = str(usuario or "admin").strip().lower()
         
@@ -138,16 +143,11 @@ class PrestamoRepository:
             )
             self.db.add(nueva_cuota)
 
-        # --- CONEXIÓN AUTOMÁTICA LIMPIA CON CAJA (SIN MÉTODOS FANTASMAS) ---
-        caja_service = CajaService(self.db, usuario_actual=current_user)
-        obs_caja = f"Desembolso por Crédito Otorgado a {cliente_obj.nombre_completo} (Préstamo #{nuevo_prestamo.id})"
-        
-        try:
-            # Utiliza exclusivamente el método oficial de retiro seguro
-            caja_service.registrar_retiro(monto=cap_dec, observacion=obs_caja)
-        except Exception:
-            # Si la caja no posee fondos suficientes o lanza excepción, se omite de forma controlada
-            pass
+        # NOTA: Deliberadamente NO se registra ningún evento de caja aquí.
+        # El otorgamiento de un crédito no debe afectar caja_disponible;
+        # el "Capital Prestado (Activo)" se calcula de forma independiente
+        # en CajaService.obtener_resumen_financiero() a partir de los
+        # préstamos activos y el saldo pendiente de sus cuotas.
 
         self.db.commit()
         self.db.refresh(nuevo_prestamo)
