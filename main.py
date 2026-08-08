@@ -38,7 +38,7 @@ class RepositorioFinanciero:
     def registrar_abono(db: SessionLocal, prestamo_id: int, monto_abono: float | Decimal, usuario: str):
         """
         Distribuye de forma inteligente el monto abonado a través de las cuotas pendientes 
-        en orden cronológico (maneja pagos exactos, parciales y abonos múltiples/adelantados).
+        en orden cronológico y registra el ingreso limpio en la caja.
         """
         monto_restante = Decimal(str(monto_abono))
         if monto_restante <= 0:
@@ -80,32 +80,16 @@ class RepositorioFinanciero:
             db.add(cuota)
             cuotas_afectadas.append(cuota.numero_cuota)
 
+        # --- REGISTRO LIMPIO EN CAJA USANDO EL MÉTODO ESPECÍFICO ---
         caja_service = CajaService(db, usuario_actual=usuario)
-        operacion_exitosa = False
-        
         detalle_cuotas_str = ", ".join([str(c) for c in cuotas_afectadas])
-        obs_caja = f"Abono inteligente aplicado a cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo_id})"
+        obs_caja = f"Pago distribuido en cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo_id})."
 
-        for metodo_caja in ["registrar_ingreso", "registrar_aporte", "registrar_movimiento", "ingresar"]:
-            if hasattr(caja_service, metodo_caja):
-                try:
-                    fn = getattr(caja_service, metodo_caja)
-                    try:
-                        fn(monto=Decimal(str(monto_abono)), tipo="INGRESO", observacion=obs_caja)
-                    except TypeError:
-                        try:
-                            fn(monto=Decimal(str(monto_abono)), observacion=obs_caja)
-                        except TypeError:
-                            fn(Decimal(str(monto_abono)))
-                    operacion_exitosa = True
-                    break
-                except Exception:
-                    pass
-
-        if not operacion_exitosa and hasattr(caja_service, "caja") and caja_service.caja:
-            if hasattr(caja_service.caja, "saldo_disponible"):
-                caja_service.caja.saldo_disponible += Decimal(str(monto_abono))
-                db.add(caja_service.caja)
+        # Llamada directa y sin ambigüedades al servicio de caja actualizado
+        caja_service.registrar_pago_cuota(
+            monto=Decimal(str(monto_abono)), 
+            observacion=obs_caja
+        )
 
         db.commit()
         return cuotas_afectadas
