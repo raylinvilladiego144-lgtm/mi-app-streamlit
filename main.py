@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 import os
+import math
 import pandas as pd
 import streamlit as st
 
@@ -301,11 +302,20 @@ def render_pagos(usuario):
             </style>
         """, unsafe_allow_html=True)
 
-        for fila in range(5):
-            cols = st.columns(6)
-            for col_idx in range(6):
-                num_espacio = (fila * 6) + col_idx + 1
-                
+        total_cuotas_cal = int(getattr(prestamo_cal, "numero_cuotas", None) or len(cuotas_prestamo) or 0)
+        columnas_por_fila = 6
+        filas_necesarias = math.ceil(total_cuotas_cal / columnas_por_fila) if total_cuotas_cal > 0 else 0
+
+        if total_cuotas_cal == 0:
+            st.info("ℹ️ Este préstamo no tiene cuotas generadas.")
+
+        for fila in range(filas_necesarias):
+            cols = st.columns(columnas_por_fila)
+            for col_idx in range(columnas_por_fila):
+                num_espacio = (fila * columnas_por_fila) + col_idx + 1
+                if num_espacio > total_cuotas_cal:
+                    continue
+
                 with cols[col_idx]:
                     cuota_obj = mapa_cuotas.get(num_espacio)
                     
@@ -321,7 +331,7 @@ def render_pagos(usuario):
                         else:
                             st.markdown(f'<div class="cuota-box">C{num_espacio}<br>${monto_cuota:,.0f}</div>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<div class="cuota-box-libre">C{num_espacio}<br>Libre</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="cuota-box-libre">C{num_espacio}<br>Sin datos</div>', unsafe_allow_html=True)
 
         st.divider()
         st.subheader("📜 Historial Reciente de Cuotas Pagadas")
@@ -449,8 +459,78 @@ def render_gestion_prestamos(usuario):
     finally:
         db.close()
 
+    st.divider()
+    st.subheader("💰 Ajuste Manual de Caja (Cuadre con Dinero Físico)")
+    st.caption(
+        "Usa esto para que la Caja Disponible de la app coincida con el efectivo "
+        "que realmente tienes en la mano — por ejemplo, cuando prestas dinero en "
+        "físico y necesitas descontarlo de caja, o cuando metes capital nuevo."
+    )
 
-# --- MÓDULO 5: GESTIÓN DE RESPALDOS Y SEGURIDAD ---
+    db = SessionLocal()
+    try:
+        caja_service_ajuste = CajaService(db, usuario_actual=usuario)
+        resumen_actual = caja_service_ajuste.obtener_resumen_financiero()
+
+        col_res1, col_res2 = st.columns(2)
+        with col_res1:
+            st.metric("💵 Caja Disponible (en la app)", f"${resumen_actual.get('caja_disponible', Decimal('0.00')):,.2f}")
+        with col_res2:
+            st.metric("📈 Capital Prestado (Activo)", f"${resumen_actual.get('capital_prestado', Decimal('0.00')):,.2f}")
+
+        tab_aporte, tab_retiro = st.tabs(["➕ Registrar Aporte (sube caja)", "➖ Registrar Retiro (baja caja)"])
+
+        with tab_aporte:
+            with st.form("form_aporte_caja"):
+                monto_aporte = st.number_input("Monto del Aporte ($) *", min_value=1.0, step=100.0, format="%.2f", key="input_monto_aporte")
+                obs_aporte = st.text_input(
+                    "Observación *",
+                    placeholder="Ej. Capital inicial no registrado / Ajuste de cuadre físico",
+                    key="input_obs_aporte"
+                )
+                btn_aporte = st.form_submit_button("➕ Registrar Aporte", type="primary", use_container_width=True)
+
+                if btn_aporte:
+                    if not obs_aporte.strip():
+                        st.warning("La observación es obligatoria para mantener trazabilidad.")
+                    else:
+                        try:
+                            caja_service_ajuste.registrar_aporte(
+                                monto=Decimal(str(monto_aporte)),
+                                observacion=obs_aporte.strip()
+                            )
+                            st.success(f"✅ Aporte de ${monto_aporte:,.2f} registrado. Caja actualizada.")
+                            st.rerun()
+                        except Exception as e:
+                            db.rollback()
+                            st.error(f"❌ Error al registrar el aporte: {e}")
+
+        with tab_retiro:
+            with st.form("form_retiro_caja"):
+                monto_retiro = st.number_input("Monto del Retiro ($) *", min_value=1.0, step=100.0, format="%.2f", key="input_monto_retiro")
+                obs_retiro = st.text_input(
+                    "Observación *",
+                    placeholder="Ej. Dinero prestado en físico a cliente / Ajuste de cuadre físico",
+                    key="input_obs_retiro"
+                )
+                btn_retiro = st.form_submit_button("➖ Registrar Retiro", type="primary", use_container_width=True)
+
+                if btn_retiro:
+                    if not obs_retiro.strip():
+                        st.warning("La observación es obligatoria para mantener trazabilidad.")
+                    else:
+                        try:
+                            caja_service_ajuste.registrar_retiro(
+                                monto=Decimal(str(monto_retiro)),
+                                observacion=obs_retiro.strip()
+                            )
+                            st.success(f"✅ Retiro de ${monto_retiro:,.2f} registrado. Caja actualizada.")
+                            st.rerun()
+                        except Exception as e:
+                            db.rollback()
+                            st.error(f"❌ Error al registrar el retiro: {e}")
+    finally:
+        db.close()
 def render_gestion_respaldos(usuario):
     st.markdown("## 🛡️ Gestión y Seguridad de Datos")
     st.caption("Respalda tu información o administra el esquema de la base de datos.")
