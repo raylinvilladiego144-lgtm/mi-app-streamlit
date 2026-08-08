@@ -38,7 +38,7 @@ class CajaService:
 
         caja_disponible = entradas - salidas
 
-        # Cálculo de cartera
+        # Cálculo de cartera (capital prestado pendiente)
         prestamos = self.db.query(Prestamo).filter(
             Prestamo.usuario == self.usuario_actual,
             Prestamo.estado == EstadoPrestamo.ACTIVO
@@ -46,7 +46,6 @@ class CajaService:
 
         capital_prestado = Decimal("0.00")
         for p in prestamos:
-            # Sumar saldos pendientes de cuotas o el capital total si no hay cuotas
             saldo_cuotas = sum((c.monto_cuota - (c.monto_pagado or 0) for c in p.cuotas 
                               if c.estado != EstadoCuota.PAGADA), Decimal("0.00"))
             capital_prestado += saldo_cuotas if saldo_cuotas > 0 else (p.capital or 0)
@@ -60,7 +59,7 @@ class CajaService:
         }
 
     def registrar_ingreso(self, monto: Decimal, observacion: str, tipo: TipoEvento = TipoEvento.APORTE_CAJA) -> EventoFinanciero:
-        """Método unificado para registrar cualquier entrada de dinero."""
+        """Método genérico para registrar entradas de dinero a la caja."""
         monto = Decimal(str(monto))
         evento = EventoFinanciero(
             tipo_evento=tipo,
@@ -73,6 +72,10 @@ class CajaService:
         self.db.refresh(evento)
         self._limpiar_cache()
         return evento
+
+    def registrar_pago_cuota(self, monto: Decimal, observacion: str) -> EventoFinanciero:
+        """Registra específicamente un abono o pago recibido de una cuota de préstamo."""
+        return self.registrar_ingreso(monto, observacion, tipo=TipoEvento.PAGO_RECIBIDO)
 
     # Aliases para compatibilidad
     registrar_aporte = registrar_ingreso
