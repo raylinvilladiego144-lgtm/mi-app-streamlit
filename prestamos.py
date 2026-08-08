@@ -156,7 +156,7 @@ def render_prestamos(usuario_actual: str = "admin"):
         # ==========================================
         with tab_nuevo:
             st.subheader("Otorgar Nuevo Crédito")
-            
+
             if not clientes:
                 st.warning("⚠️ No hay clientes registrados en el sistema. Debe registrar uno antes de crear un préstamo.")
             else:
@@ -189,7 +189,7 @@ def render_prestamos(usuario_actual: str = "admin"):
                                 observaciones=observacion,
                                 usuario=current_user
                             )
-                            st.success("🎉 ¡Préstamo creado con éxito y registrado en caja!")
+                            st.success("🎉 ¡Préstamo creado con éxito y registrado en cartera!")
                             st.rerun()
                         except Exception as ex:
                             db.rollback()
@@ -252,32 +252,13 @@ def render_prestamos(usuario_actual: str = "admin"):
                             
                             st.dataframe(datos_cuotas, use_container_width=True)
 
-                            st.markdown("#### 💰 Pago Inteligente")
-                            st.caption("Distribución automática cubriendo cuotas pendientes en orden cronológico.")
-
-                            with st.form(key=f"form_pago_inteligente_{p.id}"):
-                                valor_abono = st.number_input(
-                                    f"Valor del Abono ($) [Préstamo #{p.id}]",
-                                    min_value=1.0,
-                                    step=10.0,
-                                    format="%.2f",
-                                    key=f"input_pago_inteligente_{p.id}"
-                                )
-                                btn_procesar_pago = st.form_submit_button("Aplicar Pago Inteligente", type="primary", use_container_width=True)
-
-                                if btn_procesar_pago:
-                                    try:
-                                        prestamo_service.registrar_pago_inteligente(
-                                            prestamo_id=p.id,
-                                            monto_pagado=Decimal(str(valor_abono)),
-                                            usuario_actual=current_user,
-                                            registrar_en_caja=True
-                                        )
-                                        st.success("✅ Pago inteligente aplicado y registrado correctamente.")
-                                        st.rerun()
-                                    except Exception as err:
-                                        db.rollback()
-                                        st.error(f"❌ Error al procesar el pago: {err}")
+                            st.markdown("#### 💰 Registrar Abono")
+                            st.info(
+                                "Para registrar un abono a este préstamo, usa el módulo "
+                                "**💳 Pagos** en el menú lateral. Se dejó un único punto "
+                                "de entrada para los abonos y así evitar registros "
+                                "duplicados en caja."
+                            )
 
                         st.divider()
 
