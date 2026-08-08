@@ -148,14 +148,11 @@ class PrestamoRepository:
         # calculándose de forma derivada en obtener_resumen_financiero()
         # a partir de los préstamos activos, pero la caja SÍ debe reflejar
         # la salida real de efectivo en el momento del desembolso.
-        if cap_dec > Decimal("0.00"):
-            caja_service = CajaService(self.db, usuario_actual=current_user)
-            obs_caja = f"Desembolso de préstamo #{nuevo_prestamo.id} a {cliente_obj.nombre_completo}"
-            caja_service.registrar_desembolso_prestamo(
-                monto=cap_dec,
-                observacion=obs_caja,
-                prestamo_id=nuevo_prestamo.id
-            )
+        # El otorgamiento de un crédito NO afecta caja_disponible.
+        # "Capital Prestado (Activo)" se calcula de forma automática e
+        # independiente en CajaService.obtener_resumen_financiero() a
+        # partir de los préstamos activos y el saldo pendiente de sus
+        # cuotas — no requiere ningún evento de caja aquí.
 
         self.db.commit()
         self.db.refresh(nuevo_prestamo)
