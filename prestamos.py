@@ -287,10 +287,22 @@ def render_prestamos(usuario_actual: str = "admin"):
                         st.divider()
 
                         st.markdown("#### 🔄 Refinanciación de Préstamo")
+                        st.caption(
+                            f"Saldo pendiente actual: **${saldo_pend_calc:,.2f}**. Ese es el punto de partida "
+                            "correcto para refinanciar (lo que el cliente realmente debe hoy). Si aumentas el "
+                            "campo por encima de ese valor, la diferencia se entrega como dinero nuevo en "
+                            "efectivo y sí se descuenta de Caja Disponible."
+                        )
                         with st.form(key=f"form_refinanciacion_{p.id}"):
                             desea_refinanciar = st.selectbox("¿Desea refinanciar?", options=["No", "Sí"], key=f"sel_refinanciar_{p.id}")
                             
-                            nuevo_capital_ref = st.number_input("Nuevo Capital / Saldo Base ($)", min_value=0.0, value=float(getattr(p, 'capital', 0.0)), step=100.0, key=f"ref_capital_{p.id}")
+                            nuevo_capital_ref = st.number_input(
+                                "Nuevo Capital / Saldo Base ($) — precargado con el saldo pendiente real",
+                                min_value=0.0,
+                                value=max(saldo_pend_calc, 0.0),
+                                step=100.0,
+                                key=f"ref_capital_{p.id}"
+                            )
                             nueva_tasa = st.number_input("Nueva tasa (%)", min_value=0.0, value=float(tasa_val), step=0.5, key=f"ref_tasa_{p.id}")
                             nuevo_plazo_cuotas = st.number_input("Nuevo Número de Cuotas", min_value=1, value=int(getattr(p, 'numero_cuotas', 1)), step=1, key=f"ref_num_cuotas_{p.id}")
                             nueva_fecha = st.date_input("Nueva fecha de vencimiento", value=date.today(), key=f"ref_fecha_{p.id}")
