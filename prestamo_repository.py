@@ -151,7 +151,11 @@ class PrestamoRepository:
         if cap_dec > Decimal("0.00"):
             caja_service = CajaService(self.db, usuario_actual=current_user)
             obs_caja = f"Desembolso de préstamo #{nuevo_prestamo.id} a {cliente_obj.nombre_completo}"
-            caja_service.registrar_retiro(monto=cap_dec, observacion=obs_caja)
+            caja_service.registrar_desembolso_prestamo(
+                monto=cap_dec,
+                observacion=obs_caja,
+                prestamo_id=nuevo_prestamo.id
+            )
 
         self.db.commit()
         self.db.refresh(nuevo_prestamo)
