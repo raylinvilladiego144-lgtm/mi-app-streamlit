@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import os
 import math
+import io
+import zipfile
 import pandas as pd
 import streamlit as st
 
@@ -11,6 +13,8 @@ from base import Base
 from caja_service import CajaService
 from prestamos import render_prestamos
 from cliente_repository import ClienteRepository
+from cliente import Cliente
+from evento import EventoFinanciero
 from prestamo import Prestamo, Cuota, EstadoPrestamo, EstadoCuota
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
@@ -26,8 +30,8 @@ init_db()
 
 # --- CREDENCIALES DE ACCESO ---
 USUARIOS = {
-    "simon": "12345**",
-    "raylin": "Barcelona12*",
+    "simon": "12345",
+    "raylin": "12345*",
     "luis": "123456",
 }
 
@@ -543,25 +547,47 @@ def render_gestion_respaldos(usuario):
 
     with col1:
         st.subheader("💾 Copia de Seguridad")
-        st.write("Descarga una copia actual de la base de datos general.")
-        
-        archivos_db = [f for f in os.listdir(".") if f.endswith(".db")]
-        
-        if archivos_db:
-            db_path = archivos_db[0]
-            with open(db_path, "rb") as f:
-                db_bytes = f.read()
-            
-            st.download_button(
-                label=f"📥 Descargar Respaldo ({db_path})",
-                data=db_bytes,
-                file_name=f"respaldo_{db_path}",
-                mime="application/octet-stream",
-                type="primary",
-                use_container_width=True
-            )
-        else:
-            st.warning("⚠️ Todavía no se detecta ningún archivo de base de datos.")
+        st.write("Descarga una copia actual de toda tu información (clientes, préstamos, cuotas y movimientos) en un archivo ZIP con un CSV por tabla.")
+
+        db_respaldo = SessionLocal()
+        try:
+            tablas = {
+                "clientes": Cliente,
+                "prestamos": Prestamo,
+                "cuotas": Cuota,
+                "eventos_financieros": EventoFinanciero,
+            }
+
+            buffer = io.BytesIO()
+            total_filas = 0
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for nombre_tabla, modelo in tablas.items():
+                    filas = db_respaldo.query(modelo).all()
+                    total_filas += len(filas)
+                    columnas = [c.name for c in modelo.__table__.columns]
+                    registros = [
+                        {col: (str(getattr(fila, col)) if getattr(fila, col) is not None else "") for col in columnas}
+                        for fila in filas
+                    ]
+                    df = pd.DataFrame(registros, columns=columnas)
+                    zf.writestr(f"{nombre_tabla}.csv", df.to_csv(index=False))
+
+            buffer.seek(0)
+            fecha_respaldo = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            if total_filas > 0:
+                st.download_button(
+                    label="📥 Descargar Respaldo (ZIP con CSV por tabla)",
+                    data=buffer.getvalue(),
+                    file_name=f"respaldo_{fecha_respaldo}.zip",
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ Todavía no hay información registrada para respaldar.")
+        finally:
+            db_respaldo.close()
 
     with col2:
         st.subheader("🔥 Zona de Peligro")
