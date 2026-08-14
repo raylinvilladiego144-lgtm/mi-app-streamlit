@@ -6,25 +6,25 @@ Pantalla de gestión de clientes: Registro, Buscador y Lista en formato tarjetas
 
 import streamlit as st
 
-from app.database.database import SessionLocal
-from app.models.cliente import (
+from database import SessionLocal
+from cliente import (
     Cliente,
     CalificacionCliente,
     EstadoCliente,
 )
-from app.repositories.cliente_repository import ClienteRepository
-from app.repositories.prestamo_repository import PrestamoRepository
+from cliente_repository import ClienteRepository
 
 
-def render_clientes():
+def render_clientes(usuario="admin"):
+    usuario_actual = str(usuario or "admin").strip().lower()
+
     st.title("👤 Gestión de Clientes")
-    st.caption("Registro, consulta y seguimiento de la base de clientes")
+    st.caption(f"Registro, consulta y seguimiento de tus clientes — {usuario_actual.capitalize()}")
 
     db = SessionLocal()
 
     try:
         cliente_repo = ClienteRepository(db)
-        prestamo_repo = PrestamoRepository(db)
 
         tab1, tab2 = st.tabs(["📋 Lista de Clientes", "➕ Registrar Cliente"])
 
@@ -36,9 +36,9 @@ def render_clientes():
             )
 
             if busqueda.strip():
-                clientes = cliente_repo.buscar_clientes(busqueda)
+                clientes = cliente_repo.buscar_clientes(busqueda, usuario_actual)
             else:
-                clientes = cliente_repo.listar_todos()
+                clientes = cliente_repo.obtener_por_usuario(usuario_actual)
 
             if not clientes:
                 st.info("No se encontraron clientes registrados.")
@@ -95,8 +95,8 @@ def render_clientes():
                         st.error("Por favor complete los campos obligatorios (*).")
                     else:
                         try:
-                            # Verificar disponibilidad del documento
-                            existente = cliente_repo.obtener_por_documento(documento.strip())
+                            # Verificar disponibilidad del documento (solo entre TUS propios clientes)
+                            existente = cliente_repo.obtener_por_documento(documento.strip(), usuario_actual)
                             if existente:
                                 st.error("Ya existe un cliente registrado con este número de documento.")
                             else:
@@ -107,7 +107,8 @@ def render_clientes():
                                     direccion=direccion.strip() if direccion else None,
                                     calificacion=CalificacionCliente(calificacion),
                                     estado=EstadoCliente.ACTIVO,
-                                    observaciones=observaciones.strip() if observaciones else None
+                                    observaciones=observaciones.strip() if observaciones else None,
+                                    usuario=usuario_actual,
                                 )
                                 cliente_repo.crear(nuevo_cliente)
                                 st.success(f"Cliente '{nombre}' registrado exitosamente.")
