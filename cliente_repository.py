@@ -3,6 +3,7 @@ cliente_repository.py
 Repositorio para la gestión de operaciones de base de datos para Clientes.
 """
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from cliente import Cliente
 
@@ -10,10 +11,50 @@ from cliente import Cliente
 class ClienteRepository:
     """
     Repositorio encargado de interactuar con la tabla de clientes en la base de datos.
+
+    IMPORTANTE: todas las consultas que devuelven listados aceptan (y deben recibir)
+    el 'usuario' del admin que tiene la sesión activa, para que cada admin solo
+    vea/edite los clientes que él mismo registró. Así, mientras un admin está
+    inscribiendo un cliente, ese registro nunca aparece para los otros admins.
     """
 
     def __init__(self, db: Session):
         self.db = db
+
+    def crear(self, cliente: Cliente) -> Cliente:
+        """
+        Inserta un objeto Cliente ya construido (usado por la pantalla de registro).
+        """
+        self.db.add(cliente)
+        self.db.commit()
+        self.db.refresh(cliente)
+        return cliente
+
+    def obtener_por_documento(self, documento: str, usuario: str | None = None) -> Cliente | None:
+        """
+        Busca un cliente por documento. Si se pasa 'usuario', la búsqueda de
+        duplicados queda aislada a los clientes de ese mismo admin.
+        """
+        query = self.db.query(Cliente).filter(Cliente.documento == documento)
+        if usuario and hasattr(Cliente, "usuario"):
+            query = query.filter(Cliente.usuario == usuario)
+        return query.first()
+
+    def buscar_clientes(self, texto: str, usuario: str | None = None) -> list[Cliente]:
+        """
+        Busca por nombre o documento. Si se pasa 'usuario', solo busca dentro
+        de los clientes registrados por ese admin (no ve los de los otros 2).
+        """
+        patron = f"%{texto.strip()}%"
+        query = self.db.query(Cliente).filter(
+            or_(
+                Cliente.nombre_completo.ilike(patron),
+                Cliente.documento.ilike(patron),
+            )
+        )
+        if usuario and hasattr(Cliente, "usuario"):
+            query = query.filter(Cliente.usuario == usuario)
+        return query.all()
 
     def crear_cliente(
         self,
