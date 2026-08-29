@@ -71,6 +71,27 @@ class PrestamoService:
 
         return nuevo_prestamo
 
+    def verificar_liquidacion(self, prestamo: Prestamo) -> bool:
+        """
+        Calcula el saldo pendiente real del préstamo (monto_total - total pagado
+        en todas sus cuotas) y lo marca como LIQUIDADO si ya no queda deuda,
+        sin importar desde qué módulo se registraron los pagos (Pago Inteligente,
+        módulo de Pagos en efectivo, etc.). No modifica cuotas, montos ni
+        historial: únicamente actualiza el campo 'estado' del préstamo cuando
+        corresponde.
+        """
+        if prestamo.estado != EstadoPrestamo.ACTIVO:
+            return False
+
+        total_pagado = sum((c.monto_pagado or Decimal("0.00")) for c in prestamo.cuotas)
+        saldo_pendiente = (prestamo.monto_total or Decimal("0.00")) - total_pagado
+
+        if saldo_pendiente <= Decimal("0.01"):  # tolerancia por redondeo
+            prestamo.estado = EstadoPrestamo.LIQUIDADO
+            self.db.add(prestamo)
+            return True
+        return False
+
     def refinanciar_prestamo(
         self,
         prestamo_id: int,
@@ -245,10 +266,7 @@ class PrestamoService:
         obs_caja = f"Pago distribuido en cuota(s) #{detalle_cuotas_str} (Préstamo #{prestamo.id}). {observacion}".strip()
 
         self.db.flush()
-        todas_pagadas = all(c.estado == EstadoCuota.PAGADA for c in prestamo.cuotas)
-        if todas_pagadas:
-            prestamo.estado = EstadoPrestamo.LIQUIDADO
-            self.db.add(prestamo)
+        self.verificar_liquidacion(prestamo)
 
         # Impacto único y limpio en caja: un solo evento PAGO_RECIBIDO, sin duplicidad.
         # (Antes se llamaba también a caja_service.registrar_ingreso() sin especificar
