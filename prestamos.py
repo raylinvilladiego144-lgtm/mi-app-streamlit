@@ -225,6 +225,16 @@ def render_prestamos(usuario_actual: str = "admin"):
                             st.write(f"**Número de Cuotas:** {getattr(p, 'numero_cuotas', 'N/A')}")
                         with c_info3:
                             saldo_pend_calc = float(getattr(p, 'monto_total', 0.0)) - sum(float(c.monto_pagado or 0) for c in p.cuotas)
+
+                            # Verificación en vivo: si el saldo ya llegó a 0 (por cualquier
+                            # módulo que haya registrado el pago), liquidar el préstamo aquí
+                            # mismo antes de pintar el estado y el botón de Paz y Salvo.
+                            if prestamo_service.verificar_liquidacion(p):
+                                db.commit()
+                                db.refresh(p)
+                                estado_val = p.estado
+                                estado_str = estado_val.value if hasattr(estado_val, 'value') else str(estado_val)
+
                             st.write(f"**Saldo Pendiente:** ${saldo_pend_calc:,.2f}")
                             st.write(f"Estado: **{estado_str}**")
 
