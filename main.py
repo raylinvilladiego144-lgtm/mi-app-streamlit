@@ -82,8 +82,23 @@ class RepositorioFinanciero:
                 cuota.estado = EstadoCuota.PARCIAL
                 monto_restante = Decimal("0.00")
 
+            # Antes esta función nunca registraba la fecha real de pago,
+            # por lo que las cuotas quedaban marcadas como PAGADA pero con
+            # "Pendiente" en su fecha real — se corrige aquí.
+            cuota.fecha_pago_real = datetime.now().date()
+
             db.add(cuota)
             cuotas_afectadas.append(cuota.numero_cuota)
+
+        # Verificación de liquidación automática: antes esta función nunca
+        # revisaba si el préstamo quedó en saldo $0, por lo que se quedaba
+        # indefinidamente en estado ACTIVO aunque ya no quedara deuda.
+        db.flush()
+        total_pagado_prestamo = sum((c.monto_pagado or Decimal("0.00")) for c in prestamo.cuotas)
+        saldo_pendiente_prestamo = (prestamo.monto_total or Decimal("0.00")) - total_pagado_prestamo
+        if saldo_pendiente_prestamo <= Decimal("0.01"):
+            prestamo.estado = EstadoPrestamo.LIQUIDADO
+            db.add(prestamo)
 
         # --- REGISTRO LIMPIO EN CAJA USANDO EL MÉTODO ESPECÍFICO ---
         caja_service = CajaService(db, usuario_actual=usuario)
@@ -615,6 +630,104 @@ def render_gestion_respaldos(usuario):
                         st.error(f"❌ Ocurrió un error crítico al procesar la base de datos: {e}")
                 else:
                     st.warning("⚠️ Debes marcar la casilla de confirmación para proceder.")
+
+    # --- AUDITORÍA Y REPARACIÓN CUOTA A CUOTA (bug de interés duplicado) ---
+    st.divider()
+    st.subheader("🩺 Auditoría de Cuotas (revisar lo establecido vs. lo que ocurrió)")
+    st.write(
+        "Compara, cuota por cuota, el valor original que debería tener cada préstamo "
+        "activo (según su capital y tasa de interés) contra el valor actual guardado. "
+        "Corrige automáticamente cualquier diferencia causada por el bug del recálculo "
+        "de mora que se repetía en cada recarga de pantalla. **Nunca toca cuotas ya "
+        "pagadas ni afecta la caja.**"
+    )
+
+    db_audit = SessionLocal()
+    try:
+        # Asegura que la columna de control exista en la base de datos real
+        # (si ya existe, simplemente lo ignora).
+        try:
+            from sqlalchemy import text as _text
+            db_audit.execute(_text("ALTER TABLE cuotas ADD COLUMN ultimo_recalculo VARCHAR(20)"))
+            db_audit.commit()
+        except Exception:
+            db_audit.rollback()
+
+        prestamos_todos = db_audit.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.ACTIVO).all()
+
+        filas_diagnostico = []
+        for p in prestamos_todos:
+            capital = p.capital or Decimal("0.00")
+            tasa_dec = (p.porcentaje_interes or Decimal("0.00")) / Decimal("100")
+            monto_total_correcto = capital + (capital * tasa_dec)
+            valor_cuota_correcto = monto_total_correcto / Decimal(str(p.numero_cuotas))
+
+            for c in sorted(p.cuotas, key=lambda x: x.numero_cuota):
+                establecido = float(valor_cuota_correcto)
+                actual = float(c.monto_cuota or 0)
+                diferencia = actual - establecido
+
+                filas_diagnostico.append({
+                    "Préstamo": f"#{p.id} - {p.cliente.nombre_completo if p.cliente else '?'}",
+                    "Cuota": c.numero_cuota,
+                    "Estado Cuota": c.estado.value if hasattr(c.estado, "value") else c.estado,
+                    "Monto Establecido": establecido,
+                    "Monto Actual": actual,
+                    "Diferencia": diferencia,
+                    "¿Se corregirá?": "Sí" if (abs(diferencia) > 0.01 and c.estado != EstadoCuota.PAGADA) else "No",
+                })
+
+        if not filas_diagnostico:
+            st.info("No hay préstamos activos para auditar.")
+        else:
+            df_audit = pd.DataFrame(filas_diagnostico)
+            st.dataframe(df_audit, use_container_width=True, hide_index=True)
+
+            total_a_corregir = sum(1 for f in filas_diagnostico if f["¿Se corregirá?"] == "Sí")
+            exceso_total = sum(f["Diferencia"] for f in filas_diagnostico if f["¿Se corregirá?"] == "Sí")
+
+            if total_a_corregir == 0:
+                st.success("✅ Todas las cuotas activas coinciden con lo establecido. No hay nada que corregir.")
+            else:
+                st.warning(
+                    f"⚠️ Se detectaron **{total_a_corregir} cuota(s)** con diferencias por un total "
+                    f"de **${exceso_total:,.2f}** de más sobre lo establecido."
+                )
+                confirmar_reparacion = st.checkbox(
+                    "Confirmo que quiero corregir estas cuotas a su valor establecido (no afecta cuotas ya pagadas ni la caja)",
+                    key="confirmar_reparacion_cuotas"
+                )
+                if st.button("🔧 Corregir Cuotas Ahora", type="primary", disabled=not confirmar_reparacion):
+                    cambios_aplicados = 0
+                    for p in prestamos_todos:
+                        capital = p.capital or Decimal("0.00")
+                        tasa_dec = (p.porcentaje_interes or Decimal("0.00")) / Decimal("100")
+                        monto_total_correcto = capital + (capital * tasa_dec)
+                        valor_cuota_correcto = monto_total_correcto / Decimal(str(p.numero_cuotas))
+
+                        prestamo_afectado = False
+                        for c in p.cuotas:
+                            if c.estado == EstadoCuota.PAGADA:
+                                continue
+                            diferencia = (c.monto_cuota or Decimal("0.00")) - valor_cuota_correcto
+                            if abs(diferencia) > Decimal("0.01"):
+                                c.monto_cuota = valor_cuota_correcto
+                                if hasattr(c, "ultimo_recalculo"):
+                                    c.ultimo_recalculo = None
+                                db_audit.add(c)
+                                cambios_aplicados += 1
+                                prestamo_afectado = True
+
+                        if prestamo_afectado:
+                            p.monto_total = monto_total_correcto
+                            db_audit.add(p)
+
+                    db_audit.commit()
+                    st.cache_data.clear()
+                    st.success(f"✅ Se corrigieron {cambios_aplicados} cuota(s) correctamente.")
+                    st.rerun()
+    finally:
+        db_audit.close()
 
 
 # --- LOGIN ---
