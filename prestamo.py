@@ -92,4 +92,11 @@ class Cuota(Base):
     
     estado = Column(Enum(EstadoCuota), default=EstadoCuota.PENDIENTE)
 
+    # Guarda qué mes/año fue el último recálculo por mora aplicado a esta
+    # cuota (formato "MM/YYYY"), para que evaluar_y_recalcular_temporalidad_mensual
+    # nunca vuelva a sumar interés dos veces en el mismo mes. Antes esto se
+    # intentaba guardar en un campo 'observaciones' que no existía como
+    # columna real, por lo que el interés se sumaba de nuevo en cada recarga.
+    ultimo_recalculo = Column(String(20), nullable=True)
+
     prestamo = relationship("Prestamo", back_populates="cuotas")
