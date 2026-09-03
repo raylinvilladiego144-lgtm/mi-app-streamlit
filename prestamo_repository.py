@@ -187,17 +187,16 @@ class PrestamoRepository:
                 if cuota.fecha_pago_esperada < hoy:
                     if (hoy.year > cuota.fecha_pago_esperada.year) or \
                        (hoy.year == cuota.fecha_pago_esperada.year and hoy.month > cuota.fecha_pago_esperada.month):
-                        
-                        saldo_pendiente_cuota = cuota.monto_cuota - (cuota.monto_pagado or Decimal("0.00"))
-                        marca_recalculo = f"[Recalculado Mes {hoy.month}/{hoy.year}]"
-                        obs_actual = getattr(cuota, "observaciones", "") or ""
-                        
-                        if marca_recalculo not in obs_actual:
+
+                        marca_recalculo = f"{hoy.month}/{hoy.year}"
+
+                        if cuota.ultimo_recalculo != marca_recalculo:
+                            saldo_pendiente_cuota = cuota.monto_cuota - (cuota.monto_pagado or Decimal("0.00"))
                             interes_adicional = saldo_pendiente_cuota * tasa_dec
                             cuota.monto_cuota += interes_adicional
                             p.monto_total += interes_adicional
-                            
-                            cuota.observaciones = f"{obs_actual} {marca_recalculo}".strip()
+
+                            cuota.ultimo_recalculo = marca_recalculo
                             self.db.add(cuota)
                             self.db.add(p)
 
