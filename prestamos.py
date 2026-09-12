@@ -14,7 +14,7 @@ import streamlit as st
 from database import SessionLocal
 from prestamo_repository import PrestamoRepository
 from cliente_repository import ClienteRepository
-from prestamo import Cuota, EstadoCuota, EstadoPrestamo, ModalidadInteres
+from prestamo import Prestamo, Cuota, EstadoCuota, EstadoPrestamo, ModalidadInteres
 from evento import EventoFinanciero, TipoEvento
 from prestamo_service import PrestamoService
 
@@ -145,9 +145,15 @@ def render_prestamos(usuario_actual: str = "admin"):
         clientes = cliente_repo.listar_todos()
         prestamos_activos = prestamo_repo.obtener_por_usuario(current_user) if current_user != "admin" else prestamo_repo.listar_activos()
 
-        tab_nuevo, tab_lista, tab_simulador = st.tabs([
+        query_liquidados = db.query(Prestamo).filter(Prestamo.estado == EstadoPrestamo.LIQUIDADO)
+        if current_user != "admin" and hasattr(Prestamo, "usuario"):
+            query_liquidados = query_liquidados.filter(Prestamo.usuario == current_user)
+        prestamos_liquidados = query_liquidados.order_by(Prestamo.id.desc()).all()
+
+        tab_nuevo, tab_lista, tab_liquidados, tab_simulador = st.tabs([
             "➕ Nuevo Préstamo", 
             "📋 Préstamos Activos", 
+            "✅ Préstamos Liquidados",
             "🧮 Simulador Financiero"
         ])
 
@@ -386,7 +392,78 @@ def render_prestamos(usuario_actual: str = "admin"):
                             st.info("ℹ️ El certificado de Paz y Salvo estará disponible una vez el préstamo sea totalmente liquidado.")
 
         # ==========================================
-        # TAB 3: SIMULADOR FINANCIERO
+        # TAB 3: PRÉSTAMOS LIQUIDADOS (HISTÓRICO + PAZ Y SALVO)
+        # ==========================================
+        with tab_liquidados:
+            st.subheader("Histórico de Préstamos Liquidados")
+            st.caption(
+                "Aquí quedan disponibles los préstamos que ya alcanzaron saldo $0, "
+                "aunque ya no aparezcan en 'Préstamos Activos'. Desde aquí se puede "
+                "descargar en cualquier momento el Paz y Salvo."
+            )
+
+            if not prestamos_liquidados:
+                st.info("ℹ️ Todavía no hay préstamos liquidados para este usuario.")
+            else:
+                for p in prestamos_liquidados:
+                    nombre_cli = p.cliente.nombre_completo if hasattr(p, 'cliente') and p.cliente else "Cliente General"
+                    doc_cli = getattr(p.cliente, 'documento', 'N/A') if hasattr(p, 'cliente') and p.cliente else "N/A"
+
+                    with st.expander(f"Préstamo #{p.id} — {nombre_cli} | Capital: ${float(getattr(p, 'capital', 0.0)):,.2f} | LIQUIDADO"):
+                        c_info1, c_info2 = st.columns(2)
+                        with c_info1:
+                            st.write(f"**Capital:** ${float(getattr(p, 'capital', 0.0)):,.2f}")
+                            st.write(f"**Monto Total:** ${float(getattr(p, 'monto_total', 0.0)):,.2f}")
+                            st.write(f"**Número de Cuotas:** {getattr(p, 'numero_cuotas', 'N/A')}")
+                        with c_info2:
+                            st.write(f"**Fecha Adquisición:** {getattr(p, 'fecha_inicio', 'N/A')}")
+                            st.write(f"**Fecha Vencimiento:** {getattr(p, 'fecha_vencimiento', 'N/A')}")
+                            st.write("**Saldo Pendiente:** $0.00")
+
+                        st.markdown("---")
+                        st.markdown("### 📊 Tabla de Cuotas")
+
+                        cuotas_prestamo_liq = db.query(Cuota).filter(Cuota.prestamo_id == p.id).order_by(Cuota.numero_cuota).all()
+
+                        if cuotas_prestamo_liq:
+                            datos_cuotas_liq = []
+                            for cuota in cuotas_prestamo_liq:
+                                estado_cuota_str = cuota.estado.value if hasattr(cuota.estado, 'value') else str(cuota.estado)
+                                datos_cuotas_liq.append({
+                                    "Número": cuota.numero_cuota,
+                                    "Monto ($)": float(cuota.monto_cuota),
+                                    "Pagado ($)": float(cuota.monto_pagado or 0),
+                                    "Fecha esperada": str(cuota.fecha_pago_esperada),
+                                    "Fecha real de pago": str(cuota.fecha_pago_real or "Pendiente"),
+                                    "Estado": estado_cuota_str
+                                })
+                            st.dataframe(datos_cuotas_liq, use_container_width=True)
+
+                        st.markdown("---")
+                        st.success("🎯 Este crédito se encuentra **LIQUIDADO**. Puede descargar su Paz y Salvo:")
+                        pdf_data_liq = generar_pdf_paz_y_salvo(
+                            cliente_nombre=nombre_cli,
+                            cliente_documento=doc_cli,
+                            prestamo_id=p.id,
+                            capital=float(getattr(p, 'capital', 0.0)),
+                            interes=float(getattr(p, 'monto_total', 0.0) - getattr(p, 'capital', 0.0)),
+                            monto_total=float(getattr(p, 'monto_total', 0.0)),
+                            fecha_inicio=str(getattr(p, 'fecha_inicio', '')),
+                            fecha_vencimiento=str(getattr(p, 'fecha_vencimiento', '')),
+                            cuotas_data=cuotas_prestamo_liq,
+                            estado="LIQUIDADO"
+                        )
+                        st.download_button(
+                            label=f"📥 Descargar PDF de Paz y Salvo (Préstamo #{p.id})",
+                            data=pdf_data_liq,
+                            file_name=f"paz_y_salvo_prestamo_{p.id}.pdf",
+                            mime="application/pdf",
+                            key=f"download_paz_salvo_liq_{p.id}",
+                            use_container_width=True
+                        )
+
+        # ==========================================
+        # TAB 4: SIMULADOR FINANCIERO
         # ==========================================
         with tab_simulador:
             st.subheader("Simulador de Créditos")
