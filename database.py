@@ -15,19 +15,34 @@ if not database_url or database_url.strip() == "":
 else:
     DATABASE_URL = database_url
 
-# Inicialización del motor según el tipo de base de datos
-if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        pool_pre_ping=True
-    )
-else:
-    engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-    )
+# Inicialización del motor según el tipo de base de datos.
+#
+# IMPORTANTE: create_engine() puede fallar al momento de crearse (no solo al
+# conectar) cuando falta el driver correspondiente instalado (por ejemplo
+# 'psycopg' para postgresql+psycopg://...). Ese fallo ocurre ANTES de que
+# exista cualquier conexión, así que lo capturamos aquí mismo: si pasa,
+# dejamos 'engine' en None y guardamos el motivo en ENGINE_INIT_ERROR, en vez
+# de dejar que la excepción (ModuleNotFoundError, que ES un ImportError)
+# reviente sin control la importación de este módulo — eso es justo lo que
+# producía la pantalla "ImportError... redacted" en Streamlit Cloud.
+ENGINE_INIT_ERROR: str | None = None
+engine = None
+
+try:
+    if DATABASE_URL.startswith("sqlite"):
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False},
+            pool_pre_ping=True
+        )
+    else:
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+        )
+except Exception as e:
+    ENGINE_INIT_ERROR = f"{type(e).__name__}: {e}"
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -56,6 +71,11 @@ def verificar_conexion() -> tuple[bool, str]:
     aquí y mostrarlo con st.error() en vez de dejar que la excepción reviente
     sin control.
     """
+    if engine is None:
+        # El motor nunca llegó a crearse (por ejemplo, falta el driver
+        # 'psycopg' instalado). No hay nada contra qué conectar todavía.
+        return False, ENGINE_INIT_ERROR or "El motor de base de datos no se pudo inicializar (motivo desconocido)."
+
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -66,6 +86,10 @@ def verificar_conexion() -> tuple[bool, str]:
 
 def init_db():
     """Crea las tablas de forma segura al arrancar la aplicación y asegura permisos."""
+    if engine is None:
+        # Sin motor no hay nada que inicializar; verificar_conexion() ya
+        # habrá mostrado el motivo real en main.py antes de llegar aquí.
+        return
     try:
         from base import Base
         Base.metadata.create_all(bind=engine)
