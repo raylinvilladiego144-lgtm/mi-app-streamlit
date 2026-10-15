@@ -4,7 +4,7 @@ Módulo de conexión y gestión de base de datos blindado para producción.
 """
 
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 # Configuración robusta: por defecto usa SQLite local persistente en el contenedor
@@ -18,7 +18,7 @@ else:
 # Inicialización del motor según el tipo de base de datos
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
-        DATABASE_URL, 
+        DATABASE_URL,
         connect_args={"check_same_thread": False},
         pool_pre_ping=True
     )
@@ -30,8 +30,8 @@ else:
     )
 
 SessionLocal = sessionmaker(
-    autocommit=False, 
-    autoflush=False, 
+    autocommit=False,
+    autoflush=False,
     bind=engine
 )
 
@@ -43,18 +43,39 @@ def asegurar_permisos_sqlite(db_path="prestamos_v2.db"):
         except Exception as e:
             print(f"No se pudieron ajustar los permisos del archivo SQLite: {e}")
 
+
+def verificar_conexion() -> tuple[bool, str]:
+    """
+    Intenta abrir una conexión real contra DATABASE_URL y devuelve
+    (True, "") si funciona, o (False, mensaje_completo_del_error) si falla.
+
+    Streamlit Cloud REDACTA el texto de cualquier excepción que llegue sin
+    capturar hasta la pantalla de error ("This app has encountered an
+    error..."), así que la única forma de ver el motivo real (credenciales,
+    host, SSL, base de datos pausada, etc.) es atraparlo nosotros mismos
+    aquí y mostrarlo con st.error() en vez de dejar que la excepción reviente
+    sin control.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True, ""
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
 def init_db():
     """Crea las tablas de forma segura al arrancar la aplicación y asegura permisos."""
     try:
         from base import Base
         Base.metadata.create_all(bind=engine)
-        
+
         # Si se usa SQLite, se asegura de que el archivo no quede en modo solo lectura
         if DATABASE_URL.startswith("sqlite"):
             # Extraer nombre del archivo si viene en formato sqlite:///nombre.db
             path_archivo = DATABASE_URL.replace("sqlite:///", "").split("?")[0]
             if path_archivo:
                 asegurar_permisos_sqlite(path_archivo)
-                
+
     except Exception as e:
         print(f"Aviso en la inicialización de la base de datos: {e}")
