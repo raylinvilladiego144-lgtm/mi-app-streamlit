@@ -711,13 +711,35 @@ def render_gestion_respaldos(usuario):
                     try:
                         prestamos_por_id = {p.id: p for p in prestamos_activos}
                         ajustes_por_prestamo = {}
+                        hoy = datetime.now().date()
+                        marca_mes_actual = f"{hoy.month}/{hoy.year}"
 
                         for cuota_id, (monto_correcto, prestamo_id, diferencia) in correcciones.items():
                             cuota_obj = db_auditoria.query(Cuota).get(cuota_id)
                             if cuota_obj is None:
                                 continue
                             cuota_obj.monto_cuota = monto_correcto
-                            cuota_obj.ultimo_recalculo = None
+
+                            # IMPORTANTE: si la cuota ya está vencida (su mes de
+                            # pago esperado ya pasó), NO reiniciamos el marcador
+                            # a None. Si lo hiciéramos, la próxima vez que se abra
+                            # cualquier pantalla de préstamos activos, la función
+                            # de mora mensual la detectaría como "todavía no
+                            # recalculada este mes" y le volvería a sumar interés
+                            # de inmediato -- reproduciendo el mismo bug justo
+                            # después de corregirla. En vez de eso, la marcamos
+                            # como "ya recalculada este mes" sobre el monto recién
+                            # corregido, así queda limpia hasta el próximo mes,
+                            # que es cuando legítimamente le tocaría una mora más.
+                            fecha_esperada = cuota_obj.fecha_pago_esperada
+                            ya_vencida_mes_pasado = False
+                            if fecha_esperada and fecha_esperada < hoy:
+                                if (hoy.year > fecha_esperada.year) or \
+                                   (hoy.year == fecha_esperada.year and hoy.month > fecha_esperada.month):
+                                    ya_vencida_mes_pasado = True
+
+                            cuota_obj.ultimo_recalculo = marca_mes_actual if ya_vencida_mes_pasado else None
+
                             db_auditoria.add(cuota_obj)
                             ajustes_por_prestamo[prestamo_id] = ajustes_por_prestamo.get(prestamo_id, Decimal("0.00")) - diferencia
 
