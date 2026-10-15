@@ -36,10 +36,23 @@ try:
             pool_pre_ping=True
         )
     else:
+        # IMPORTANTE: Supabase (y la mayoría de proveedores en la nube) exponen
+        # Postgres a través de un "pooler" (Supavisor/PgBouncer) en modo
+        # "Transaction" (normalmente puerto 6543). En ese modo, cada consulta
+        # puede terminar ejecutándose en una conexión física distinta del lado
+        # del servidor, pero el driver psycopg (v3) por defecto PREPARA
+        # statements y los cachea asumiendo que la conexión física es estable.
+        # Como no lo es, el servidor termina viendo el mismo nombre de
+        # statement preparado (ej. "_pg3_19") "ya existente" en una conexión
+        # física donde psycopg cree que no existe, y truena con
+        # DuplicatePreparedStatement. La solución es decirle a psycopg que NO
+        # prepare statements del lado del servidor cuando se usa a través de
+        # un pooler de este tipo.
         engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,
             pool_recycle=3600,
+            connect_args={"prepare_threshold": None},
         )
 except Exception as e:
     ENGINE_INIT_ERROR = f"{type(e).__name__}: {e}"
