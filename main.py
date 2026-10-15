@@ -6,6 +6,7 @@ import io
 import zipfile
 import pandas as pd
 import streamlit as st
+from sqlalchemy import text
 
 # --- IMPORTACIÓN DE MÓDULOS PLANOS Y MOTOR DE BASE DE DATOS ---
 from database import SessionLocal, init_db, engine, verificar_conexion, DATABASE_URL
@@ -644,6 +645,148 @@ def render_gestion_respaldos(usuario):
                         st.error(f"❌ Ocurrió un error crítico al procesar la base de datos: {e}")
                 else:
                     st.warning("⚠️ Debes marcar la casilla de confirmación para proceder.")
+
+    st.divider()
+    st.subheader("🩺 Auditoría de Cuotas (revisar lo establecido vs. lo que ocurrió)")
+    st.caption(
+        "Recalcula, para cada préstamo ACTIVO, cuánto debería valer el total y cada "
+        "cuota según su capital y tasa originales, y lo compara con lo que quedó "
+        "guardado. Solo toca cuotas NO pagadas con diferencia; nunca modifica cuotas "
+        "ya pagadas ni otras tablas."
+    )
+
+    db_auditoria = SessionLocal()
+    try:
+        # Asegura que la columna 'ultimo_recalculo' exista (migración segura,
+        # no borra ni altera datos existentes si la columna ya está creada).
+        try:
+            db_auditoria.execute(text("ALTER TABLE cuotas ADD COLUMN ultimo_recalculo VARCHAR(20)"))
+            db_auditoria.commit()
+        except Exception:
+            db_auditoria.rollback()
+
+        prestamos_activos = db_auditoria.query(Prestamo).filter(
+            Prestamo.estado == EstadoPrestamo.ACTIVO
+        ).all()
+
+        filas_auditoria = []
+        correcciones = {}  # cuota_id -> (monto_correcto, prestamo_id, diferencia)
+
+        for p in prestamos_activos:
+            capital = p.capital or Decimal("0.00")
+            tasa_dec = (p.porcentaje_interes or Decimal("0.00")) / Decimal("100")
+            monto_total_correcto = (capital + (capital * tasa_dec)).quantize(Decimal("0.01"))
+
+            cuotas_no_pagadas = [c for c in p.cuotas if c.estado != EstadoCuota.PAGADA]
+            if not cuotas_no_pagadas or p.numero_cuotas == 0:
+                continue
+
+            valor_cuota_correcto = (monto_total_correcto / p.numero_cuotas).quantize(Decimal("0.01"))
+
+            for c in cuotas_no_pagadas:
+                diferencia = (c.monto_cuota or Decimal("0.00")) - valor_cuota_correcto
+                if abs(diferencia) > Decimal("0.01"):
+                    filas_auditoria.append({
+                        "Préstamo": p.id,
+                        "Cuota": c.numero_cuota,
+                        "Estado Cuota": c.estado.value if hasattr(c.estado, "value") else str(c.estado),
+                        "Monto Establecido": float(valor_cuota_correcto),
+                        "Monto Actual": float(c.monto_cuota or 0),
+                        "Diferencia": float(diferencia),
+                        "¿Se corregirá?": "Sí",
+                    })
+                    correcciones[c.id] = (valor_cuota_correcto, p.id, diferencia)
+
+        if filas_auditoria:
+            df_auditoria = pd.DataFrame(filas_auditoria)
+            st.warning(f"⚠️ Se encontraron {len(filas_auditoria)} cuota(s) con diferencia respecto a lo establecido.")
+            st.dataframe(df_auditoria, use_container_width=True, hide_index=True)
+
+            confirmar_correccion = st.checkbox(
+                "Confirmo que quiero corregir estas cuotas a su valor establecido original",
+                key="confirmar_correccion_auditoria",
+            )
+            if st.button("🔧 Corregir Cuotas Ahora", type="primary", key="btn_corregir_auditoria"):
+                if confirmar_correccion:
+                    try:
+                        prestamos_por_id = {p.id: p for p in prestamos_activos}
+                        ajustes_por_prestamo = {}
+
+                        for cuota_id, (monto_correcto, prestamo_id, diferencia) in correcciones.items():
+                            cuota_obj = db_auditoria.query(Cuota).get(cuota_id)
+                            if cuota_obj is None:
+                                continue
+                            cuota_obj.monto_cuota = monto_correcto
+                            cuota_obj.ultimo_recalculo = None
+                            db_auditoria.add(cuota_obj)
+                            ajustes_por_prestamo[prestamo_id] = ajustes_por_prestamo.get(prestamo_id, Decimal("0.00")) - diferencia
+
+                        for prestamo_id, ajuste in ajustes_por_prestamo.items():
+                            p_obj = prestamos_por_id.get(prestamo_id)
+                            if p_obj is not None:
+                                p_obj.monto_total = (p_obj.monto_total or Decimal("0.00")) + ajuste
+                                db_auditoria.add(p_obj)
+
+                        db_auditoria.commit()
+                        st.success("✅ Cuotas corregidas correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        db_auditoria.rollback()
+                        st.error(f"❌ Error al corregir cuotas: {e}")
+                else:
+                    st.warning("⚠️ Debes marcar la casilla de confirmación para proceder.")
+        else:
+            st.success("✅ No se encontraron diferencias entre lo establecido y lo registrado en los préstamos activos.")
+
+        st.divider()
+        st.subheader("🗑️ Eliminar una cuota puntual")
+        st.caption(
+            "Para casos excepcionales (una cuota creada por error, duplicada, etc.). "
+            "Solo permite eliminar cuotas que NO tengan pagos registrados — si la cuota "
+            "ya tiene un abono, primero debes revertir ese pago."
+        )
+
+        id_prestamo_elim = st.number_input("ID del préstamo", min_value=0, step=1, key="id_prestamo_elim_cuota")
+        if id_prestamo_elim:
+            prestamo_elim = db_auditoria.query(Prestamo).get(int(id_prestamo_elim))
+            if prestamo_elim is None:
+                st.error("No existe un préstamo con ese ID.")
+            else:
+                opciones_cuota = {
+                    f"Cuota #{c.numero_cuota} — ${float(c.monto_cuota):,.2f} — {c.estado.value if hasattr(c.estado,'value') else c.estado} — pagado: ${float(c.monto_pagado or 0):,.2f}": c.id
+                    for c in sorted(prestamo_elim.cuotas, key=lambda x: x.numero_cuota)
+                }
+                if opciones_cuota:
+                    seleccion = st.selectbox("Cuota a eliminar", list(opciones_cuota.keys()), key="select_cuota_elim")
+                    cuota_id_elim = opciones_cuota[seleccion]
+                    cuota_elim = db_auditoria.query(Cuota).get(cuota_id_elim)
+
+                    if (cuota_elim.monto_pagado or Decimal("0.00")) > Decimal("0.00"):
+                        st.error("🚫 Esta cuota ya tiene pagos registrados. No se puede eliminar sin revertir antes el pago.")
+                    else:
+                        confirmar_elim = st.checkbox(
+                            f"Confirmo eliminar la Cuota #{cuota_elim.numero_cuota} del préstamo #{prestamo_elim.id}",
+                            key="confirmar_elim_cuota",
+                        )
+                        if st.button("🗑️ Eliminar Cuota", type="primary", key="btn_eliminar_cuota"):
+                            if confirmar_elim:
+                                try:
+                                    prestamo_elim.monto_total = (prestamo_elim.monto_total or Decimal("0.00")) - (cuota_elim.monto_cuota or Decimal("0.00"))
+                                    prestamo_elim.numero_cuotas = max(0, (prestamo_elim.numero_cuotas or 1) - 1)
+                                    db_auditoria.delete(cuota_elim)
+                                    db_auditoria.add(prestamo_elim)
+                                    db_auditoria.commit()
+                                    st.success("✅ Cuota eliminada y total del préstamo ajustado.")
+                                    st.rerun()
+                                except Exception as e:
+                                    db_auditoria.rollback()
+                                    st.error(f"❌ Error al eliminar la cuota: {e}")
+                            else:
+                                st.warning("⚠️ Debes marcar la casilla de confirmación para proceder.")
+                else:
+                    st.info("Este préstamo no tiene cuotas registradas.")
+    finally:
+        db_auditoria.close()
 
 
 # --- LOGIN ---
